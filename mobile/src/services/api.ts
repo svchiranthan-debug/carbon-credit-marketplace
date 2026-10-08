@@ -1,21 +1,24 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 
-// Mac LAN IP verified via network configuration for physical device testing
-export const MAC_LAN_IP = "172.20.10.3";
-
+/**
+ * Development API address resolution (first match wins):
+ *  1. EXPO_PUBLIC_API_URL (set in mobile/.env), e.g. http://192.168.1.20:8000/api
+ *  2. The IP of the computer running Metro (Expo Go on a physical phone reaches the
+ *     backend on that same machine, port 8000)
+ *  3. Emulator/simulator defaults: Android emulator -> 10.0.2.2, iOS simulator / web -> localhost
+ * "localhost" is never used for a physical device, because it would point at the phone itself.
+ */
 function resolveApiBaseUrl(): string {
-  // 1. Explicit env override if set
-  if (process.env.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL;
+  const fromEnv = process.env.EXPO_PUBLIC_API_URL;
+  if (fromEnv) {
+    return fromEnv.replace(/\/+$/, "");
   }
 
-  // 2. Extract host from Expo Metro debugger host (auto-detects Mac LAN IP when iPhone connects to Metro)
   const hostUri =
     Constants.expoConfig?.hostUri ||
     (Constants as any).manifest?.debuggerHost ||
     (Constants as any).manifest2?.extra?.expoGo?.debuggerHost;
-
   if (hostUri) {
     const ip = hostUri.split(":")[0];
     if (ip && ip !== "localhost" && ip !== "127.0.0.1") {
@@ -23,12 +26,25 @@ function resolveApiBaseUrl(): string {
     }
   }
 
-  // 3. Physical iPhone / real device or iOS simulator connecting to local network
   if (Platform.OS === "android") {
-    return `http://${MAC_LAN_IP}:8000/api`;
+    return "http://10.0.2.2:8000/api";
   }
+  return "http://localhost:8000/api";
+}
 
-  return `http://${MAC_LAN_IP}:8000/api`;
+function formatErrorDetail(detail: any, status: number): string {
+  if (!detail) return `Request failed (HTTP ${status})`;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        const field = Array.isArray(d.loc) ? d.loc.filter((p: string) => p !== "body").join(".") : "";
+        const msg = String(d.msg || "").replace(/^Value error, /, "");
+        return field ? `${field}: ${msg}` : msg;
+      })
+      .join("; ");
+  }
+  return JSON.stringify(detail);
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();
@@ -57,46 +73,34 @@ class MobileApiClient {
       headers["Content-Type"] = "application/json";
     }
 
-    const method = options.method || "GET";
-    console.log(`[Mobile API] -> ${method} ${API_BASE_URL}${endpoint}`);
-
-    const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
-      headers
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
+    } catch {
+      throw new Error(
+        `Cannot reach the backend at ${API_BASE_URL}. Check that FastAPI is running with --host 0.0.0.0 ` +
+          `and that the phone and computer are on the same network.`
+      );
+    }
 
     if (!res.ok) {
-      let msg = "Network error";
+      let detail: any = null;
       try {
-        const errJson = await res.json();
-        msg = errJson.detail || JSON.stringify(errJson);
+        detail = (await res.json()).detail;
       } catch {
-        msg = `HTTP ${res.status}: ${res.statusText}`;
+        // non-JSON error body
       }
-      console.error(`[Mobile API] Error on ${endpoint}: HTTP ${res.status} - ${msg}`);
-      throw new Error(msg);
+      throw new Error(formatErrorDetail(detail, res.status));
     }
 
     return res.json();
   }
 
   // Auth
-  async login(email: string, role: string) {
+  async login(email: string, password: string) {
     return this.request("/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password: "Demo@123", role })
-    });
-  }
-
-  async register(full_name: string, email: string, role: string) {
-    return this.request("/auth/register", {
-      method: "POST",
-      body: JSON.stringify({
-        full_name,
-        email,
-        password: "Demo@123",
-        role
-      })
+      body: JSON.stringify({ email, password })
     });
   }
 
@@ -138,20 +142,8 @@ class MobileApiClient {
     return this.request(`/plantations/${plantationId}/verification`);
   }
 
-  async runVerification(plantationId: number, groundImagePath?: string, socSamplePct?: number) {
-    if (groundImagePath !== undefined || socSamplePct !== undefined) {
-      return this.request(`/verification/run`, {
-        method: "POST",
-        body: JSON.stringify({
-          plantation_id: plantationId,
-          ground_image_path: groundImagePath,
-          soc_sample_pct: socSamplePct
-        })
-      });
-    }
-    return this.request(`/plantations/${plantationId}/verify`, {
-      method: "POST"
-    });
+  async runVerification(plantationId: number) {
+    return this.request(`/plantations/${plantationId}/verify`, { method: "POST" });
   }
 
   // Carbon Assets & Marketplace
@@ -164,21 +156,16 @@ class MobileApiClient {
   }
 
   async acquireCredit(creditId: string) {
-    return this.request(`/marketplace/credits/${creditId}/purchase`, {
-      method: "POST",
-      body: JSON.stringify({ payment_method: "ESCROW_INR" })
-    });
+    // Whole-lot purchase; prototype only, no payment is processed.
+    return this.request(`/marketplace/credits/${creditId}/purchase`, { method: "POST", body: JSON.stringify({}) });
   }
 
   async getBuyerPortfolio() {
     return this.request("/marketplace/my-credits");
   }
 
-  async retireCredit(creditId: string, reason: string) {
-    return this.request(`/marketplace/credits/${creditId}/retire`, {
-      method: "POST",
-      body: JSON.stringify({ retirement_beneficiary: reason })
-    });
+  async retireCredit(creditId: string) {
+    return this.request(`/marketplace/credits/${creditId}/retire`, { method: "POST" });
   }
 
   // Auditor Queue

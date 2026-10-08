@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
@@ -14,14 +15,17 @@ export default function AuditorScreen() {
   const [queue, setQueue] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [actingId, setActingId] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadQueue = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.getAuditorQueue();
       setQueue(data || []);
     } catch (err: any) {
-      console.warn("Error loading auditor queue:", err.message);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -43,11 +47,8 @@ export default function AuditorScreen() {
           onPress: async () => {
             setActingId(item.id);
             try {
-              await api.submitAuditorDecision(
-                item.id,
-                decision,
-                `Audited via Mobile MRV Console by Lead Auditor. Evidence reviewed.`
-              );
+              // Only the auditor's own notes are sent; the backend requires them for overrides.
+              await api.submitAuditorDecision(item.id, decision, (notes[item.id] || "").trim());
               Alert.alert("Decision Recorded", `Status updated to ${decision}.`);
               loadQueue();
             } catch (err: any) {
@@ -68,6 +69,7 @@ export default function AuditorScreen() {
         <Text style={styles.title}>Auditor Verification Queue</Text>
       </View>
 
+      {loadError && <Text style={{ color: "#B91C1C", marginBottom: 10 }}>⚠️ {loadError}</Text>}
       {loading ? (
         <ActivityIndicator size="large" color="#1B3B2B" style={{ marginTop: 40 }} />
       ) : queue.length === 0 ? (
@@ -78,15 +80,17 @@ export default function AuditorScreen() {
       ) : (
         queue.map((item) => {
           const isHighRisk = item.risk_level === "HIGH";
-          const isRealSat = item.is_real_satellite;
+          const ndviSource = item.ndvi_provenance === "SENTINEL2_COMPUTED" ? "Sentinel-2" : item.ndvi_provenance === "REPORTED" ? "Reported" : "Unavailable";
+          const scored = item.overall_score !== null && item.overall_score !== undefined;
+          const decidable = Boolean(item.id);
 
           return (
-            <View key={item.id} style={[styles.card, isHighRisk && styles.cardHighRisk]}>
+            <View key={item.id || `preview-${item.plantation_id}`} style={[styles.card, isHighRisk && styles.cardHighRisk]}>
               <View style={styles.cardHeader}>
                 <View>
-                  <Text style={styles.cardId}>{item.id}</Text>
-                  <Text style={styles.cardPlot}>Plot #{item.plantation_id} • {item.plantation_name || "Agroforest"}</Text>
-                  <Text style={styles.farmerText}>Farmer: {item.farmer_name || "Registered Farmer"}</Text>
+                  <Text style={styles.cardId}>{item.id || "Not yet verified"}</Text>
+                  <Text style={styles.cardPlot}>Plot #{item.plantation_id} • {item.plantation_name || "—"}</Text>
+                  <Text style={styles.farmerText}>Farmer: {item.farmer_name || "—"} • Score: {scored ? item.overall_score : "—"}</Text>
                 </View>
                 <View style={[
                   styles.statusBadge,
@@ -101,56 +105,70 @@ export default function AuditorScreen() {
               <View style={styles.metricsGrid}>
                 <View style={styles.metricCard}>
                   <Text style={styles.metricLabel}>SATELLITE NDVI</Text>
-                  <Text style={styles.metricVal}>{item.ndvi_score !== null ? `${item.ndvi_score}` : "—"}</Text>
-                  <Text style={[styles.metricTag, isRealSat ? styles.tagReal : styles.tagSim]}>
-                    {isRealSat ? "Sentinel-2 Real" : "Simulation"}
+                  <Text style={styles.metricVal}>{item.ndvi_score != null ? `${item.ndvi_score}` : "—"}</Text>
+                  <Text style={[styles.metricTag, item.ndvi_provenance === "SENTINEL2_COMPUTED" ? styles.tagReal : styles.tagSim]}>
+                    {ndviSource}
                   </Text>
                 </View>
 
                 <View style={styles.metricCard}>
                   <Text style={styles.metricLabel}>AI VISION</Text>
-                  <Text style={styles.metricVal}>{item.cv_score !== null ? `${item.cv_score}` : "—"}</Text>
+                  <Text style={styles.metricVal}>{item.cv_score != null ? `${item.cv_score}` : "—"}</Text>
                   <Text style={styles.metricTag}>
-                    {item.ai_confidence_pct ? `${item.ai_confidence_pct}% Conf` : "ExG Check"}
+                    {item.ai_confidence_pct != null ? `${item.ai_confidence_pct}% Conf` : "—"}
                   </Text>
                 </View>
 
                 <View style={styles.metricCard}>
                   <Text style={styles.metricLabel}>SOIL SOC</Text>
-                  <Text style={styles.metricVal}>{item.soc_score !== null ? `${item.soc_score}` : "—"}</Text>
-                  <Text style={styles.metricTag}>{item.soc_pct ? `${item.soc_pct}%` : "—"}</Text>
+                  <Text style={styles.metricVal}>{item.soc_score != null ? `${item.soc_score}` : "—"}</Text>
+                  <Text style={styles.metricTag}>{item.soc_pct != null ? `${item.soc_pct}%` : "—"}</Text>
                 </View>
               </View>
 
               {/* Risk Engine Indicators */}
-              <View style={[
+              {item.risk_level ? <View style={[
                 styles.riskBanner,
                 isHighRisk ? styles.riskHigh : item.risk_level === "MEDIUM" ? styles.riskMed : styles.riskLow
               ]}>
                 <Text style={styles.riskBannerTitle}>
-                  Risk Score: {item.risk_score || 0}/100 • {item.risk_level || "LOW"} RISK
+                  Risk Score: {item.risk_score}/100 • {item.risk_level} RISK
                 </Text>
                 {item.risk_factors && item.risk_factors.length > 0 ? (
                   <Text style={styles.riskFactorText}>⚠️ {item.risk_factors[0]}</Text>
                 ) : (
-                  <Text style={styles.riskFactorText}>✓ Evidence signals consistent. No duplicate image hashes.</Text>
+                  <Text style={styles.riskFactorText}>No risk factors triggered.</Text>
                 )}
-              </View>
+              </View> : (
+                <Text style={styles.riskFactorText}>
+                  Risk not assessed{item.missing_evidence?.length ? ` — missing: ${item.missing_evidence.join(", ")}` : ""}
+                </Text>
+              )}
+
+              {decidable && (
+                <TextInput
+                  style={styles.notesInput}
+                  placeholder="Auditor notes (required when overriding the engine)"
+                  placeholderTextColor="#94A3B8"
+                  value={notes[item.id] || ""}
+                  onChangeText={(t) => setNotes({ ...notes, [item.id]: t })}
+                />
+              )}
 
               {/* Auditor Action Buttons */}
               <View style={styles.actionRow}>
                 <TouchableOpacity
-                  style={[styles.btn, styles.rejectBtn, actingId === item.id && styles.btnDisabled]}
+                  style={[styles.btn, styles.rejectBtn, (!decidable || actingId === item.id) && styles.btnDisabled]}
                   onPress={() => handleDecision(item, "REJECTED")}
-                  disabled={actingId === item.id}
+                  disabled={!decidable || actingId === item.id}
                 >
                   <Text style={styles.rejectBtnText}>Reject</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.btn, styles.approveBtn, actingId === item.id && styles.btnDisabled]}
+                  style={[styles.btn, styles.approveBtn, (!scored || !decidable || actingId === item.id) && styles.btnDisabled]}
                   onPress={() => handleDecision(item, "APPROVED")}
-                  disabled={actingId === item.id}
+                  disabled={!scored || !decidable || actingId === item.id}
                 >
                   <Text style={styles.approveBtnText}>Approve Verification</Text>
                 </TouchableOpacity>
@@ -200,6 +218,7 @@ const styles = StyleSheet.create({
   rejectBtn: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E8F0" },
   rejectBtnText: { color: "#DC2626", fontSize: 11, fontWeight: "700" },
   btnDisabled: { opacity: 0.5 },
+  notesInput: { borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 6, padding: 8, fontSize: 11, color: "#0F172A", marginTop: 6 },
   emptyBox: { padding: 40, alignItems: "center" },
   emptyTitle: { fontSize: 14, fontWeight: "800", color: "#334155" },
   emptySub: { fontSize: 11, color: "#64748B", textAlign: "center", marginTop: 4 }

@@ -8,18 +8,29 @@ import {
   Alert,
   StyleSheet
 } from "react-native";
-import { useAuth, UserRole } from "../context/AuthContext";
+import { useAuth } from "../context/AuthContext";
+import { API_BASE_URL } from "../services/api";
+
+const DEMO_ACCOUNTS: { label: string; email: string }[] = [
+  { label: "Farmer", email: "farmer@agrocarbon.demo" },
+  { label: "Buyer", email: "buyer@ecocorp.demo" },
+  { label: "Auditor", email: "auditor@agrocarbon.demo" },
+];
 
 export default function LoginScreen() {
   const { login, isLoading } = useAuth();
-  const [selectedRole, setSelectedRole] = useState<UserRole>("FARMER");
-  const [customEmail, setCustomEmail] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   const handleSignIn = async () => {
+    if (!email.trim() || !password) {
+      Alert.alert("Missing details", "Enter your email and password.");
+      return;
+    }
     try {
-      await login(selectedRole, customEmail || undefined);
+      await login(email, password);
     } catch (err: any) {
-      Alert.alert("Authentication Failed", err.message || "Unable to connect to the backend server. Please verify your connection.");
+      Alert.alert("Sign-in failed", err.message);
     }
   };
 
@@ -32,38 +43,25 @@ export default function LoginScreen() {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.label}>Select Operational Role</Text>
-        <View style={styles.roleRow}>
-          {(["FARMER", "BUYER", "AUDITOR"] as UserRole[]).map((r) => (
-            <TouchableOpacity
-              key={r}
-              style={[styles.roleBtn, selectedRole === r && styles.roleBtnActive]}
-              onPress={() => setSelectedRole(r)}
-            >
-              <Text style={[styles.roleBtnText, selectedRole === r && styles.roleBtnTextActive]}>
-                {r}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        <Text style={styles.roleDesc}>
-          {selectedRole === "FARMER" && "Register agroforestry plantations, geotag coordinates via GPS, and submit camera evidence."}
-          {selectedRole === "BUYER" && "Browse verified carbon assets, acquire credits via escrow, and retire certificates."}
-          {selectedRole === "AUDITOR" && "Audit incoming plantations, inspect AI vision and satellite NDVI, and evaluate risk scores."}
-        </Text>
-
         <Text style={styles.label}>Email Address</Text>
         <TextInput
           style={styles.input}
-          placeholder={
-            selectedRole === "FARMER" ? "farmer@agrocarbon.demo" :
-            selectedRole === "BUYER" ? "buyer@agrocarbon.demo" : "auditor@agrocarbon.demo"
-          }
+          placeholder="you@example.com"
           placeholderTextColor="#94A3B8"
-          value={customEmail}
-          onChangeText={setCustomEmail}
+          value={email}
+          onChangeText={setEmail}
           autoCapitalize="none"
+          keyboardType="email-address"
+        />
+
+        <Text style={styles.label}>Password</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Password"
+          placeholderTextColor="#94A3B8"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
         />
 
         <TouchableOpacity
@@ -71,18 +69,21 @@ export default function LoginScreen() {
           onPress={handleSignIn}
           disabled={isLoading}
         >
-          {isLoading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitBtnText}>Enter as {selectedRole}</Text>
-          )}
+          {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>Sign in</Text>}
         </TouchableOpacity>
+
+        <Text style={[styles.label, { marginTop: 16 }]}>Seeded demo accounts (fills the email only)</Text>
+        <View style={styles.roleRow}>
+          {DEMO_ACCOUNTS.map((a) => (
+            <TouchableOpacity key={a.email} style={styles.roleBtn} onPress={() => setEmail(a.email)}>
+              <Text style={styles.roleBtnText}>{a.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>
-          Connected to FastAPI Backend on port 8000 • Shared unified database & blockchain registry.
-        </Text>
+        <Text style={styles.footerText}>Backend: {API_BASE_URL}</Text>
       </View>
     </View>
   );

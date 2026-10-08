@@ -16,14 +16,16 @@ export default function BuyerScreen() {
   const [portfolio, setPortfolio] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadMarketplace = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.getMarketplaceCredits();
       setCredits(data || []);
     } catch (err: any) {
-      console.warn("Marketplace load error:", err.message);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -31,11 +33,12 @@ export default function BuyerScreen() {
 
   const loadPortfolio = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.getBuyerPortfolio();
       setPortfolio(data || []);
     } catch (err: any) {
-      console.warn("Portfolio load error:", err.message);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -52,7 +55,7 @@ export default function BuyerScreen() {
   const handleAcquire = async (credit: any) => {
     Alert.alert(
       "Confirm Acquisition",
-      `Acquire ${credit.carbon_quantity_tco2e} tCO2e for ₹${credit.total_price_inr?.toLocaleString("en-IN")} via Escrow?`,
+      `Acquire ${credit.carbon_quantity_tco2e} tCO2e for ₹${(credit.carbon_quantity_tco2e * credit.price_per_tco2e).toLocaleString("en-IN")}? (Prototype: no real payment is processed.)`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -77,7 +80,7 @@ export default function BuyerScreen() {
   const handleRetire = async (credit: any) => {
     Alert.alert(
       "Irrevocable Retirement",
-      `Permanently retire ${credit.carbon_quantity_tco2e} tCO2e for corporate ESG offset certificate? This action is recorded immutably on blockchain.`,
+      `Permanently retire ${credit.carbon_quantity_tco2e} tCO2e for corporate ESG offset certificate? This cannot be undone.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -86,8 +89,8 @@ export default function BuyerScreen() {
           onPress: async () => {
             setProcessingId(credit.id);
             try {
-              await api.retireCredit(credit.id, "Corporate Scope 1/2 Emissions Offset 2026");
-              Alert.alert("Asset Retired", `Certificate generated for asset ${credit.id}. Provenance recorded on-chain.`);
+              const res = await api.retireCredit(credit.id);
+              Alert.alert("Asset Retired", `Asset ${credit.id} retired. Blockchain: ${res?.blockchain_status === "CONFIRMED" ? `recorded on-chain (${res.blockchain_tx_hash})` : "not recorded on-chain (database only)"}.`);
               loadPortfolio();
             } catch (err: any) {
               Alert.alert("Retirement Failed", err.message);
@@ -123,6 +126,7 @@ export default function BuyerScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {loadError && <Text style={{ color: "#B91C1C", marginBottom: 10 }}>⚠️ {loadError}</Text>}
         {loading ? (
           <ActivityIndicator size="large" color="#1B3B2B" style={{ marginTop: 40 }} />
         ) : tab === "MARKETPLACE" ? (
@@ -137,7 +141,7 @@ export default function BuyerScreen() {
                 <View style={styles.cardHeader}>
                   <View>
                     <Text style={styles.cardId}>{c.id}</Text>
-                    <Text style={styles.cardName}>{c.plantation_name || "Agroforestry Plot"}</Text>
+                    <Text style={styles.cardName}>{c.plantation_name || "—"}</Text>
                   </View>
                   <View style={styles.verifiedBadge}>
                     <Text style={styles.verifiedBadgeText}>VERIFIED</Text>
@@ -155,7 +159,7 @@ export default function BuyerScreen() {
                   </View>
                   <View style={styles.metricItem}>
                     <Text style={styles.metricLabel}>Total Amount</Text>
-                    <Text style={[styles.metricVal, { color: "#166534" }]}>₹{c.total_price_inr?.toLocaleString("en-IN")}</Text>
+                    <Text style={[styles.metricVal, { color: "#166534" }]}>₹{(c.carbon_quantity_tco2e * c.price_per_tco2e).toLocaleString("en-IN")}</Text>
                   </View>
                 </View>
 
@@ -189,11 +193,11 @@ export default function BuyerScreen() {
                 <View style={styles.cardHeader}>
                   <View>
                     <Text style={styles.cardId}>{c.id}</Text>
-                    <Text style={styles.cardName}>{c.plantation_name || "Carbon Asset"}</Text>
+                    <Text style={styles.cardName}>{c.plantation_name || "—"}</Text>
                   </View>
                   <View style={[styles.verifiedBadge, c.status === "RETIRED" && styles.retiredBadge]}>
                     <Text style={[styles.verifiedBadgeText, c.status === "RETIRED" && styles.retiredBadgeText]}>
-                      {c.status || "HOLDING"}
+                      {c.status}
                     </Text>
                   </View>
                 </View>

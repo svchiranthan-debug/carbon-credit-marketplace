@@ -16,8 +16,8 @@ import * as Location from "expo-location";
 
 interface PlantationMapModalProps {
   visible: boolean;
-  initialLat: number;
-  initialLon: number;
+  initialLat?: number;
+  initialLon?: number;
   onClose: () => void;
   onLocationSelected: (lat: number, lon: number, locationName?: string) => void;
 }

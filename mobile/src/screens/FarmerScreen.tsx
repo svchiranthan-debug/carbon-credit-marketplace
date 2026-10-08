@@ -33,20 +33,24 @@ export default function FarmerScreen() {
 
   // Map Modal State
   const [mapVisible, setMapVisible] = useState(false);
-  const [locationLabel, setLocationLabel] = useState("Mandya (Agroforest), Karnataka");
+  const [locationLabel, setLocationLabel] = useState("");
 
   // Form State
   const [name, setName] = useState("");
-  const [species, setSpecies] = useState("Teak, Silver Oak & Coffee");
-  const [treeCount, setTreeCount] = useState("450");
-  const [areaHectares, setAreaHectares] = useState("1.8");
-  const [soilSoc, setSoilSoc] = useState("1.85");
-  const [latitude, setLatitude] = useState("12.5218");
-  const [longitude, setLongitude] = useState("76.8951");
+  // All fields start empty: nothing is submitted unless the farmer entered it.
+  const [species, setSpecies] = useState("");
+  const [treeCount, setTreeCount] = useState("");
+  const [areaHectares, setAreaHectares] = useState("");
+  const [ageYears, setAgeYears] = useState("");
+  const [soilSoc, setSoilSoc] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [imageUri, setImageUri] = useState<string | null>(null);
 
   const fetchPlantations = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.getPlantations();
       setPlantations(data || []);
@@ -54,7 +58,7 @@ export default function FarmerScreen() {
         loadVerification(data[0]);
       }
     } catch (err: any) {
-      console.warn("Error fetching plantations:", err.message);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -196,6 +200,10 @@ export default function FarmerScreen() {
       Alert.alert("Missing Field", "Please enter plantation name.");
       return;
     }
+    if (!species.trim()) {
+      Alert.alert("Missing Field", "Please enter the tree species.");
+      return;
+    }
 
     if (!api.getToken()) {
       Alert.alert(
@@ -224,13 +232,19 @@ export default function FarmerScreen() {
       return;
     }
 
+    const parsedAge = parseFloat(ageYears);
+    if (isNaN(parsedAge) || parsedAge < 0) {
+      Alert.alert("Invalid Age", "Please enter the plantation age in years.");
+      return;
+    }
+
     let parsedSoc: number | undefined = undefined;
     if (soilSoc.trim()) {
       const val = parseFloat(soilSoc.trim());
-      if (isNaN(val) || val < 0 || val > 10) {
+      if (isNaN(val) || val <= 0 || val > 10) {
         Alert.alert(
           "Invalid SOC Value",
-          "Soil Organic Carbon (SOC) must be a numeric percentage between 0.0% and 10.0%, or left blank if awaiting lab test."
+          "Soil Organic Carbon (SOC) must be a percentage above 0 and at most 10, or left blank if awaiting a lab test."
         );
         return;
       }
@@ -251,19 +265,15 @@ export default function FarmerScreen() {
       console.log(`[Mobile MRV] Creating plantation record at ${API_BASE_URL}/plantations`);
       const newPlot = await api.createPlantation({
         name: name.trim(),
-        farmer_name: user?.full_name || "Ramesh Gowda",
-        location: locationLabel || `Karnataka (${latNum.toFixed(4)}, ${lonNum.toFixed(4)})`,
+        location: locationLabel || `${latNum.toFixed(5)}, ${lonNum.toFixed(5)}`,
         latitude: latNum,
         longitude: lonNum,
         area_hectares: parsedArea,
-        plantation_age_years: 3.5,
+        plantation_age_years: parsedAge,
         tree_count: parsedTrees,
-        tree_species: species,
-        soil_soc_pct: parsedSoc,
-        soil_depth_cm: 45.0,
-        soil_type: "Red Sandy Loam",
-        plantation_type: "Agroforestry",
-        sustainable_practice: "Organic Mulching"
+        tree_species: species.trim(),
+        soil_soc_pct: parsedSoc ?? null,
+        plantation_type: "Agroforestry"
       });
 
       console.log(`[Mobile MRV] Plantation created: Plot #${newPlot.id}`);
@@ -296,14 +306,16 @@ export default function FarmerScreen() {
       // 3. Trigger multi-modal verification
       console.log(`[Mobile MRV] Running verification for plot #${newPlot.id}...`);
       try {
-        const ver = await api.runVerification(newPlot.id, uploadedImagePath, parsedSoc);
+        // Evidence is already attached to the plantation; just run the verification.
+        const ver = await api.runVerification(newPlot.id);
         console.log(`[Mobile MRV] Verification response: Decision=${ver.decision}, Score=${ver.overall_score}`);
         setVerification(ver);
 
         const scoreText = ver.overall_score !== null ? `${ver.overall_score} / 100` : "PENDING (Evidence required)";
         Alert.alert(
           "Verification Complete",
-          `Plot #${newPlot.id} Multi-Modal Result:\n\nStatus: ${ver.decision}\nScore: ${scoreText}\nRisk Level: ${ver.risk_level || "LOW"}`
+          `Plot #${newPlot.id} Multi-Modal Result:\n\nStatus: ${ver.decision}\nScore: ${scoreText}\nRisk Level: ${ver.risk_level ?? "not assessed"}` +
+            (ver.decision_reasons?.length ? `\n\n${ver.decision_reasons.slice(0, 3).join("\n")}` : "")
         );
       } catch (verErr: any) {
         console.error(`[Mobile MRV] Verification error: ${verErr.message}`);
@@ -340,8 +352,8 @@ export default function FarmerScreen() {
       {/* Interactive Map Picker Modal */}
       <PlantationMapModal
         visible={mapVisible}
-        initialLat={parseFloat(latitude) || 12.5218}
-        initialLon={parseFloat(longitude) || 76.8951}
+        initialLat={parseFloat(latitude) || undefined}
+        initialLon={parseFloat(longitude) || undefined}
         onClose={() => setMapVisible(false)}
         onLocationSelected={(lat, lon, locName) => {
           setLatitude(lat.toFixed(4));
@@ -353,6 +365,7 @@ export default function FarmerScreen() {
       {/* Network Server Indicator */}
       <View style={styles.networkBanner}>
         <Text style={styles.networkBannerText}>📡 Backend Server: {API_BASE_URL}</Text>
+        {loadError && <Text style={[styles.networkBannerText, { color: "#B91C1C" }]}>⚠️ {loadError}</Text>}
       </View>
 
       {/* Header */}
@@ -373,7 +386,21 @@ export default function FarmerScreen() {
 
         <View style={styles.row}>
           <View style={styles.halfCol}>
-            <Text style={styles.label}>Tree Count</Text>
+            <Text style={styles.label}>Age (years) *</Text>
+            <TextInput
+              style={styles.input}
+              keyboardType="numeric"
+              placeholder="e.g., 6"
+              value={ageYears}
+              onChangeText={setAgeYears}
+            />
+          </View>
+          <View style={styles.halfCol} />
+        </View>
+
+        <View style={styles.row}>
+          <View style={styles.halfCol}>
+            <Text style={styles.label}>Tree Count *</Text>
             <TextInput
               style={styles.input}
               keyboardType="numeric"
@@ -392,9 +419,10 @@ export default function FarmerScreen() {
           </View>
         </View>
 
-        <Text style={styles.label}>Tree Species & Agroforestry Mix</Text>
+        <Text style={styles.label}>Tree Species *</Text>
         <TextInput
           style={styles.input}
+          placeholder="e.g., Areca"
           value={species}
           onChangeText={setSpecies}
         />
@@ -404,7 +432,7 @@ export default function FarmerScreen() {
           <View style={styles.locationHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.locationLabel}>Plantation Location & Geotag</Text>
-              <Text style={styles.locationSubLabel} numberOfLines={1}>{locationLabel}</Text>
+              <Text style={styles.locationSubLabel} numberOfLines={1}>{locationLabel || "Not set — use Map or GPS"}</Text>
             </View>
             <View style={styles.locationBtnRow}>
               {/* Button to Open Native Map */}
@@ -417,7 +445,7 @@ export default function FarmerScreen() {
               </TouchableOpacity>
             </View>
           </View>
-          <Text style={styles.coordText}>Lat: {latitude} • Lon: {longitude}</Text>
+          <Text style={styles.coordText}>Lat: {latitude || "—"} • Lon: {longitude || "—"}</Text>
         </View>
 
         {/* Soil Organic Carbon */}
@@ -427,13 +455,14 @@ export default function FarmerScreen() {
             <TextInput
               style={styles.input}
               keyboardType="numeric"
+              placeholder="from soil test (optional)"
               value={soilSoc}
               onChangeText={setSoilSoc}
             />
           </View>
           <View style={styles.halfCol}>
             <Text style={styles.label}>Soil Depth</Text>
-            <TextInput style={[styles.input, styles.disabledInput]} value="0 - 30 cm" editable={false} />
+            <TextInput style={[styles.input, styles.disabledInput]} value="Not recorded" editable={false} />
           </View>
         </View>
 
@@ -595,41 +624,49 @@ export default function FarmerScreen() {
               <View style={styles.pillarsGrid}>
                 <View style={styles.pillarCard}>
                   <Text style={styles.pillarTag}>SATELLITE (40%)</Text>
-                  <Text style={styles.pillarVal}>{verification.ndvi_score || "—"}</Text>
+                  <Text style={styles.pillarVal}>{verification.ndvi_score ?? "—"}</Text>
                   <Text style={styles.pillarSub}>
-                    {verification.is_real_satellite ? "Sentinel-2 Real" : "Simulator"}
+                    {verification.ndvi_provenance === "SENTINEL2_COMPUTED" ? "Sentinel-2" : verification.ndvi_provenance === "REPORTED" ? "Reported" : "Unavailable"}
                   </Text>
                 </View>
 
                 <View style={styles.pillarCard}>
                   <Text style={styles.pillarTag}>AI VISION (35%)</Text>
-                  <Text style={styles.pillarVal}>{verification.cv_score || "—"}</Text>
+                  <Text style={styles.pillarVal}>{verification.cv_score ?? "—"}</Text>
                   <Text style={styles.pillarSub}>
-                    {verification.ai_confidence_pct ? `${verification.ai_confidence_pct}% Conf` : "Pending"}
+                    {verification.ai_confidence_pct != null ? `${verification.ai_confidence_pct}% Conf` : "—"}
                   </Text>
                 </View>
 
                 <View style={styles.pillarCard}>
                   <Text style={styles.pillarTag}>SOIL SOC (25%)</Text>
-                  <Text style={styles.pillarVal}>{verification.soc_score || "—"}</Text>
-                  <Text style={styles.pillarSub}>{verification.soc_pct ? `${verification.soc_pct}%` : "—"}</Text>
+                  <Text style={styles.pillarVal}>{verification.soc_score ?? "—"}</Text>
+                  <Text style={styles.pillarSub}>{verification.soc_pct != null ? `${verification.soc_pct}%` : "—"}</Text>
                 </View>
               </View>
 
-              <View style={[
+              {verification.decision_reasons?.length > 0 && (
+                <View style={{ marginTop: 8 }}>
+                  {verification.decision_reasons.map((r: string, i: number) => (
+                    <Text key={i} style={styles.riskDetail}>• {r}</Text>
+                  ))}
+                </View>
+              )}
+
+              {verification.risk_level && <View style={[
                 styles.riskBox,
                 verification.risk_level === "HIGH" ? styles.riskHigh :
                 verification.risk_level === "MEDIUM" ? styles.riskMed : styles.riskLow
               ]}>
                 <Text style={styles.riskTitle}>
-                  Fraud & Risk Score: {verification.risk_score || 0}/100 • {verification.risk_level || "LOW"} RISK
+                  Fraud & Risk Score: {verification.risk_score}/100 • {verification.risk_level} RISK
                 </Text>
                 {verification.risk_factors && verification.risk_factors.length > 0 ? (
                   <Text style={styles.riskDetail}>⚠️ {verification.risk_factors[0]}</Text>
                 ) : (
-                  <Text style={styles.riskDetail}>✓ All signals consistent. pHash verified unique.</Text>
+                  <Text style={styles.riskDetail}>No risk factors triggered.</Text>
                 )}
-              </View>
+              </View>}
             </View>
           )}
         </View>

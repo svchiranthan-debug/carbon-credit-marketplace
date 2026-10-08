@@ -1,13 +1,13 @@
 import React from "react";
 import { SafeAreaView, View, Text, TouchableOpacity, StyleSheet, StatusBar } from "react-native";
-import { AuthProvider, useAuth, UserRole } from "./src/context/AuthContext";
+import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import LoginScreen from "./src/screens/LoginScreen";
 import FarmerScreen from "./src/screens/FarmerScreen";
 import BuyerScreen from "./src/screens/BuyerScreen";
 import AuditorScreen from "./src/screens/AuditorScreen";
 
 function MainApp() {
-  const { user, role, setRole, logout } = useAuth();
+  const { user, logout } = useAuth();
 
   if (!user) {
     return <LoginScreen />;
@@ -22,7 +22,7 @@ function MainApp() {
         <View>
           <Text style={styles.navTitle}>CARBON MARKETPLACE</Text>
           <Text style={styles.navSub}>
-            {user.full_name} • <Text style={{ fontWeight: "800", color: "#1B3B2B" }}>{role}</Text>
+            {user.full_name} • <Text style={{ fontWeight: "800", color: "#1B3B2B" }}>{user.role}</Text>
           </Text>
         </View>
 
@@ -31,26 +31,12 @@ function MainApp() {
         </TouchableOpacity>
       </View>
 
-      {/* Role Navigation Bar */}
-      <View style={styles.roleBar}>
-        {(["FARMER", "BUYER", "AUDITOR"] as UserRole[]).map((r) => (
-          <TouchableOpacity
-            key={r}
-            style={[styles.roleTab, role === r && styles.roleTabActive]}
-            onPress={() => setRole(r)}
-          >
-            <Text style={[styles.roleTabText, role === r && styles.roleTabTextActive]}>
-              {r === "FARMER" ? "🌾 Farmer" : r === "BUYER" ? "💼 Buyer" : "🛡️ Auditor"}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
       {/* Screen Body */}
       <View style={styles.body}>
-        {role === "FARMER" && <FarmerScreen />}
-        {role === "BUYER" && <BuyerScreen />}
-        {role === "AUDITOR" && <AuditorScreen />}
+        {/* The screen follows the role of the signed-in account (from the backend). */}
+        {user.role === "FARMER" && <FarmerScreen />}
+        {user.role === "BUYER" && <BuyerScreen />}
+        {(user.role === "AUDITOR" || user.role === "ADMIN") && <AuditorScreen />}
       </View>
     </SafeAreaView>
   );
