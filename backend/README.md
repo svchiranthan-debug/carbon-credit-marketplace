@@ -64,7 +64,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - Interactive docs (Swagger): `http://localhost:8000/docs`
 - Health: `http://localhost:8000/api/health`, chain status: `http://localhost:8000/api/blockchain/status`
 
-Demo accounts (password `Demo@123`): `farmer@agrocarbon.demo`, `farmer2@agrocarbon.demo`, `buyer@ecocorp.demo`, `buyer2@greeninvest.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo`. Public registration allows FARMER and BUYER only. AUDITOR accounts are created by an ADMIN (`POST /api/users`, or the admin dashboard form). ADMIN accounts come from `seed_data.py`.
+Demo accounts (password `Demo@123`): `farmer@agrocarbon.demo`, `farmer2@agrocarbon.demo`, `buyer@ecocorp.demo`, `buyer2@greeninvest.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo`. Public registration allows FARMER, BUYER and AUDITOR. ADMIN accounts come from `seed_data.py`; an ADMIN can also create accounts with `POST /api/users` (or the admin dashboard form).
 
 ## Ground-photo model
 

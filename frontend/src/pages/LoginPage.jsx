@@ -127,9 +127,6 @@ export default function LoginPage({ setCurrentView, portalRole, setPortalRole })
           </form>
 
           <div className="mt-6 pt-4 border-t border-slate-100 text-center text-xs text-slate-500">
-            {portalRole === "AUDITOR" ? (
-              <span>Auditor accounts are created by the platform administrator.</span>
-            ) : (<>
             Don't have an account yet?{" "}
             <button
               onClick={() => {
@@ -140,7 +137,6 @@ export default function LoginPage({ setCurrentView, portalRole, setPortalRole })
             >
               Create an account
             </button>
-            </>)}
           </div>
         </div>
       </div>

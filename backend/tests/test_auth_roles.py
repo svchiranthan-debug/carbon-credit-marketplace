@@ -16,11 +16,11 @@ def test_register_and_login_each_self_service_role(client):
         assert me.json()["email"] == email
 
 
-def test_admin_and_auditor_roles_cannot_self_register(client):
-    for role in ("ADMIN", "AUDITOR"):
-        r = client.post("/api/auth/register", json={"email": f"x{uuid.uuid4().hex[:6]}@test.example", "password": "TestPass@123", "full_name": "X", "role": role})
-        assert r.status_code == 422, role
-    assert "administrator" in str(r.json()["detail"])
+def test_admin_cannot_self_register_but_auditor_can(client):
+    r = client.post("/api/auth/register", json={"email": f"x{uuid.uuid4().hex[:6]}@test.example", "password": "TestPass@123", "full_name": "X", "role": "ADMIN"})
+    assert r.status_code == 422
+    r = client.post("/api/auth/register", json={"email": f"a{uuid.uuid4().hex[:6]}@test.example", "password": "TestPass@123", "full_name": "A", "role": "AUDITOR"})
+    assert r.status_code in (200, 201) and r.json()["user"]["role"] == "AUDITOR"
 
 
 def test_only_admin_can_create_auditors(client):
