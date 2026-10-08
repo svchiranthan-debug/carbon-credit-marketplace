@@ -3,7 +3,10 @@ Sentinel-2 L2A NDVI client.
 
 Queries the Microsoft Planetary Computer STAC API for a recent, low-cloud Sentinel-2 L2A
 scene covering the plantation, then reads ONLY the pixels inside the plantation footprint
-from the Red (B04) and Near-Infrared (B08) bands and computes
+(the farmer's drawn boundary polygon when available, otherwise a square of the plot's area
+around its centre) from the Red (B04) and Near-Infrared (B08) bands. Pixels that the scene
+classification layer (SCL) marks as cloud, cloud shadow, cirrus, snow, saturated or no-data
+are excluded, and computes
 
     NDVI = (NIR - Red) / (NIR + Red)
 
@@ -42,18 +45,46 @@ def unavailable(reason: str, bbox: Optional[List[float]] = None) -> Dict[str, An
     }
 
 
+# Sentinel-2 Scene Classification (SCL) classes that are not usable ground observations.
+SCL_EXCLUDED = {0, 1, 3, 8, 9, 10, 11}  # no-data, saturated/defective, cloud shadow, cloud med/high, cirrus, snow
+MIN_CLEAR_FRACTION = 0.5  # at least half of the plot's pixels must be cloud-free
+
+
+class Footprint:
+    """The area NDVI is measured over: a boundary polygon (lon/lat ring) or a square approximation."""
+
+    def __init__(self, bbox: List[float], polygon: Optional[List[List[float]]], kind: str):
+        self.bbox = bbox
+        self.polygon = polygon  # closed ring of [lon, lat], or None
+        self.kind = kind        # "POLYGON" | "SQUARE_APPROX"
+
+    def geojson(self) -> Dict[str, Any]:
+        if self.polygon:
+            return {"type": "Polygon", "coordinates": [self.polygon]}
+        b = self.bbox
+        return {"type": "Polygon", "coordinates": [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]]]}
+
+
 def footprint_bbox(latitude: float, longitude: float, area_hectares: Optional[float]) -> List[float]:
     """[min_lon, min_lat, max_lon, max_lat] of a square with the plantation's area, centred on it.
 
-    The backend stores the plantation centroid and area (not the drawn polygon), so the
-    footprint is approximated as a square of equal area. A minimum 20 m x 20 m box keeps at
-    least a few 10 m pixels inside the window for very small plots.
+    Used when no boundary polygon was stored. A minimum 20 m x 20 m box keeps at least a few
+    10 m pixels inside the window for very small plots.
     """
     area_m2 = max((area_hectares or 0.0) * 10_000.0, 400.0)
     half_side_m = math.sqrt(area_m2) / 2.0
     dlat = half_side_m / 111_320.0
     dlon = half_side_m / (111_320.0 * max(math.cos(math.radians(latitude)), 1e-6))
     return [longitude - dlon, latitude - dlat, longitude + dlon, latitude + dlat]
+
+
+def make_footprint(latitude: float, longitude: float, area_hectares: Optional[float],
+                   boundary_lonlat: Optional[List[List[float]]] = None) -> Footprint:
+    if boundary_lonlat and len(boundary_lonlat) >= 4:
+        lons = [p[0] for p in boundary_lonlat]
+        lats = [p[1] for p in boundary_lonlat]
+        return Footprint([min(lons), min(lats), max(lons), max(lats)], boundary_lonlat, "POLYGON")
+    return Footprint(footprint_bbox(latitude, longitude, area_hectares), None, "SQUARE_APPROX")
 
 
 def dn_to_reflectance(dn: np.ndarray, processing_baseline: Optional[str]) -> np.ndarray:
@@ -101,10 +132,12 @@ class SatelliteClient:
         latitude: float,
         longitude: float,
         area_hectares: Optional[float] = None,
+        boundary_lonlat: Optional[List[List[float]]] = None,
         max_cloud_cover: float = 20.0,
         lookback_days: int = 120,
     ) -> Dict[str, Any]:
-        bbox = footprint_bbox(latitude, longitude, area_hectares)
+        footprint = make_footprint(latitude, longitude, area_hectares, boundary_lonlat)
+        bbox = footprint.bbox
 
         if not settings.ENABLE_REAL_SATELLITE_QUERIES:
             return unavailable("Satellite queries are disabled (ENABLE_REAL_SATELLITE_QUERIES=false).", bbox)
@@ -143,12 +176,13 @@ class SatelliteClient:
             )
 
         features.sort(key=lambda f: f.get("properties", {}).get("eo:cloud_cover", 100.0))
-        last_reason = "No scene could be read."
+        reasons = []
         for scene in features[:3]:
-            result, last_reason = cls._ndvi_from_scene(scene, bbox)
+            result, reason = cls._ndvi_from_scene(scene, footprint)
             if result is not None:
                 return result
-        return unavailable(f"Sentinel-2 scenes found but band pixels could not be read: {last_reason}", bbox)
+            reasons.append(f"{scene.get('id', 'scene')}: {reason}")
+        return unavailable("No usable Sentinel-2 observation of the plot. " + " | ".join(reasons), bbox)
 
     @classmethod
     def _sign_href(cls, href: str) -> Optional[str]:
@@ -173,21 +207,51 @@ class SatelliteClient:
             return None
 
     @classmethod
-    def _read_band_window(cls, href: str, bbox: List[float]) -> np.ndarray:
+    def _read_window(cls, href: str, footprint: "Footprint", out_shape: Optional[Tuple[int, int]] = None):
+        """Reads the footprint's bounding window. Returns (array, window_transform, crs).
+
+        ``out_shape`` resamples (nearest neighbour) onto a given grid, used to put the 20 m SCL
+        band on the 10 m B04/B08 grid.
+        """
         import rasterio
+        from rasterio.enums import Resampling
         from rasterio.warp import transform_bounds
-        from rasterio.windows import from_bounds
+        from rasterio.windows import Window, from_bounds
 
         with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", GDAL_HTTP_TIMEOUT=str(int(settings.SATELLITE_REQUEST_TIMEOUT_S))):
             with rasterio.open(href) as src:
-                bounds = transform_bounds("EPSG:4326", src.crs, *bbox)
-                window = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
-                if window.width < 1 or window.height < 1:
-                    window = window.__class__(window.col_off, window.row_off, max(1, window.width), max(1, window.height))
-                return src.read(1, window=window, boundless=True, fill_value=0)
+                bounds = transform_bounds("EPSG:4326", src.crs, *footprint.bbox)
+                window = from_bounds(*bounds, transform=src.transform)
+                window = Window(int(math.floor(window.col_off)), int(math.floor(window.row_off)),
+                                max(1, int(math.ceil(window.width))), max(1, int(math.ceil(window.height))))
+                kwargs = {"window": window, "boundless": True, "fill_value": 0}
+                if out_shape is not None:
+                    kwargs.update(out_shape=out_shape, resampling=Resampling.nearest)
+                data = src.read(1, **kwargs)
+                win_transform = src.window_transform(window)
+                if out_shape is not None and out_shape != (window.height, window.width):
+                    win_transform = win_transform * win_transform.scale(window.width / out_shape[1], window.height / out_shape[0])
+                return data, win_transform, src.crs
 
     @classmethod
-    def _ndvi_from_scene(cls, scene: Dict[str, Any], bbox: List[float]) -> Tuple[Optional[Dict[str, Any]], str]:
+    def _read_band_window(cls, href: str, bbox: List[float]) -> np.ndarray:
+        """Backwards-compatible helper: raw window for a bounding box."""
+        return cls._read_window(href, Footprint(bbox, None, "SQUARE_APPROX"))[0]
+
+    @staticmethod
+    def footprint_mask(footprint: "Footprint", shape: Tuple[int, int], transform, crs) -> np.ndarray:
+        """True for pixels inside the footprint polygon (pixel centres; all touched for tiny plots)."""
+        from rasterio.features import geometry_mask
+        from rasterio.warp import transform_geom
+
+        geom = transform_geom("EPSG:4326", crs, footprint.geojson())
+        inside = geometry_mask([geom], out_shape=shape, transform=transform, invert=True)
+        if not inside.any():
+            inside = geometry_mask([geom], out_shape=shape, transform=transform, invert=True, all_touched=True)
+        return inside
+
+    @classmethod
+    def _ndvi_from_scene(cls, scene: Dict[str, Any], footprint: "Footprint") -> Tuple[Optional[Dict[str, Any]], str]:
         try:
             import rasterio  # noqa: F401
         except ImportError:
@@ -197,17 +261,21 @@ class SatelliteClient:
         assets = scene.get("assets", {})
         red_asset = assets.get("B04") or assets.get("red")
         nir_asset = assets.get("B08") or assets.get("nir")
+        scl_asset = assets.get("SCL") or assets.get("scl")
         if not red_asset or not nir_asset:
             return None, "Scene has no B04/B08 assets."
+        if not scl_asset:
+            return None, "Scene has no SCL (cloud classification) asset."
 
-        red_href = cls._sign_href(red_asset["href"])
-        nir_href = cls._sign_href(nir_asset["href"])
-        if not red_href or not nir_href:
+        hrefs = [cls._sign_href(a["href"]) for a in (red_asset, nir_asset, scl_asset)]
+        if not all(hrefs):
             return None, "Could not obtain a Planetary Computer access token for band files."
 
         try:
-            red_dn = cls._read_band_window(red_href, bbox)
-            nir_dn = cls._read_band_window(nir_href, bbox)
+            red_dn, transform, crs = cls._read_window(hrefs[0], footprint)
+            nir_dn, _, _ = cls._read_window(hrefs[1], footprint)
+            scl, _, _ = cls._read_window(hrefs[2], footprint, out_shape=red_dn.shape)
+            inside = cls.footprint_mask(footprint, red_dn.shape, transform, crs)
         except Exception as exc:  # rasterio/GDAL raise a variety of IO errors
             logger.warning("Band read failed for %s: %s", scene.get("id"), exc)
             return None, f"Band read failed ({exc.__class__.__name__})."
@@ -215,11 +283,21 @@ class SatelliteClient:
         if red_dn.shape != nir_dn.shape:
             return None, "Red and NIR windows have different shapes."
 
+        footprint_pixels = int(inside.sum())
+        if footprint_pixels == 0:
+            return None, "Plot footprint covers no satellite pixels."
+        clear = inside & ~np.isin(scl, list(SCL_EXCLUDED))
+        clear_pixels = int(clear.sum())
+        clear_fraction = clear_pixels / footprint_pixels
+        if clear_fraction < MIN_CLEAR_FRACTION:
+            return None, f"Only {clear_fraction:.0%} of the plot is cloud-free in this scene (need {MIN_CLEAR_FRACTION:.0%})."
+
         baseline = props.get("s2:processing_baseline")
         ndvi = compute_ndvi(dn_to_reflectance(red_dn, baseline), dn_to_reflectance(nir_dn, baseline))
+        ndvi[~clear] = np.nan
         stats = summarize_ndvi(ndvi)
         if stats is None:
-            return None, "All pixels in the plantation footprint are no-data."
+            return None, "All cloud-free pixels in the plantation footprint are no-data."
 
         platform = props.get("platform", "Sentinel-2")
         scene_id = scene.get("id", "unknown-scene")
@@ -232,6 +310,9 @@ class SatelliteClient:
             "acquisition_date": acquired,
             "cloud_cover_pct": props.get("eo:cloud_cover"),
             "processing_baseline": baseline,
-            "bounding_box": bbox,
+            "footprint_type": footprint.kind,
+            "footprint_pixel_count": footprint_pixels,
+            "clear_pixel_pct": round(clear_fraction * 100.0, 1),
+            "bounding_box": footprint.bbox,
             "formula": NDVI_FORMULA,
         }, ""

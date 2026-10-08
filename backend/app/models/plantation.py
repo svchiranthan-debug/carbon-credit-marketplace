@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, CheckConstraint
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, CheckConstraint, JSON
 from sqlalchemy.orm import relationship
 from ..database import Base
 
@@ -31,6 +31,9 @@ class Plantation(Base):
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     area_hectares = Column(Float, nullable=False)
+    # Farmer-drawn boundary as a GeoJSON Polygon ([lon, lat] ring). Null for plots registered
+    # with only a centre point and area (e.g. from the mobile app); NDVI then uses a square approximation.
+    boundary_geojson = Column(JSON, nullable=True)
     plantation_age_years = Column(Float, nullable=False)
     tree_count = Column(Integer, nullable=False)
     tree_species = Column(String, nullable=False)
@@ -52,6 +55,12 @@ class Plantation(Base):
     status = Column(String, nullable=False, default=PlantationStatus.SUBMITTED.value)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def boundary(self):
+        """Boundary as [[lat, lng], ...] (no closing point), or None."""
+        from ..services.geometry import latlngs_from_geojson
+        return latlngs_from_geojson(self.boundary_geojson) or None
 
     # Relationships
     farmer = relationship("User", back_populates="plantations")

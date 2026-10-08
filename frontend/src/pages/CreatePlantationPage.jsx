@@ -63,7 +63,9 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
       latitude: geoData.latitude,
       longitude: geoData.longitude,
       area_hectares: geoData.area_hectares,
-      area_sqm: geoData.area_sqm
+      area_sqm: geoData.area_sqm,
+      // Drawn polygon as [[lat, lng], ...]; sent to the backend so NDVI is measured over the real field
+      boundary: Array.isArray(geoData.coordinates) && geoData.coordinates.length >= 3 ? geoData.coordinates : null
     }));
   };
 
@@ -165,6 +167,7 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
         plantation_type: formData.plantation_type || "Agroforestry",
         sustainable_practice: formData.sustainable_practice || "Standard Organic Agroforestry",
         image_url: finalImageUrl || null,
+        boundary: formData.boundary || null,
         soil_soc_pct: hasSoil ? parseFloat(formData.soil_soc_pct) : null,
         soil_depth_cm: (hasSoil && formData.soil_depth_cm) ? parseFloat(formData.soil_depth_cm) : null,
         soil_type: (hasSoil && formData.soil_type) ? formData.soil_type : null
