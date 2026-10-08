@@ -323,7 +323,8 @@ class VerificationEngine:
         result["evidence_summary"] = summary
         result["limitations_disclaimer"] = (
             "Prototype verification — not a certified carbon-registry methodology. The ground-photo "
-            "classifier was trained only on synthetic images and has no real-world validation. "
+            "classifier was trained on real scene photos (forest vs. built/other scenes) but has not "
+            "been tested on real plantation field photos. "
             "Carbon quantities use a simple per-tree sequestration assumption."
         )
         return result

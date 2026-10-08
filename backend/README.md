@@ -66,6 +66,16 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 Demo accounts (password `Demo@123`): `farmer@agrocarbon.demo`, `farmer2@agrocarbon.demo`, `buyer@ecocorp.demo`, `buyer2@greeninvest.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo`. Public registration allows FARMER and BUYER only. AUDITOR accounts are created by an ADMIN (`POST /api/users`, or the admin dashboard form). ADMIN accounts come from `seed_data.py`.
 
+## Ground-photo model
+
+`ml/weights/plantation_classifier_v2.pt` is trained on real photographs and scores 98.4% on held-out real test photos (`ml/reports/evaluation_v2.md`). To rebuild it (~12 minutes on a laptop CPU):
+
+```bash
+python ml/build_real_dataset.py   # downloads the source photos (~500 MB git cache) into ml/dataset_real/
+python ml/train.py                # writes v2 weights, metadata and the evaluation report
+python ml/evaluate.py             # re-checks any checkpoint on the real test split
+```
+
 ## Tests
 
 ```bash
@@ -94,7 +104,8 @@ app/
     blockchain_service.py    CarbonCreditRegistry via web3 (Ganache)
     ai/                      satellite_client (Sentinel-2), ndvi_service, ai_vision_service (MobileNetV3), cv_service, soc_service
 contracts/                CarbonCreditRegistry.sol + compiled ABI/bytecode, compile_contract.js
-ml/                       prepare_dataset.py (synthetic images), train.py, evaluate.py, weights/
+ml/                       build_real_dataset.py (real photos), train.py, evaluate.py, weights/, reports/
+                          (prepare_dataset.py only makes synthetic images for tests)
 scripts/                  deploy_contract.py, sync_blockchain.py, audit_legacy_data.py, check_geocoding.py
 tests/                    pytest suite
 ```

@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     SATELLITE_REQUEST_TIMEOUT_S: float = 10.0
 
     # --- Machine learning (ground photo classifier) ---
-    ML_MODEL_PATH: str = os.path.join(BACKEND_DIR, "ml", "weights", "plantation_classifier_v1.pt")
+    ML_MODEL_PATH: str = os.path.join(BACKEND_DIR, "ml", "weights", "plantation_classifier_v2.pt")
     ML_METADATA_PATH: str = os.path.join(BACKEND_DIR, "ml", "weights", "model_metadata.json")
 
     # --- Blockchain (local Ganache) ---
