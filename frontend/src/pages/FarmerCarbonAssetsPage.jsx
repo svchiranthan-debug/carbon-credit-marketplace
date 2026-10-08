@@ -5,7 +5,7 @@ import StatusBadge from "../components/StatusBadge";
 import LoadError from "../components/LoadError";
 import { Award, RefreshCw, ArrowRight, CheckCircle, Trees } from "lucide-react";
 
-export default function FarmerCarbonAssetsPage({ setCurrentView, setSelectedCreditId, setSelectedPlantationId }) {
+export default function FarmerCarbonAssetsPage({ setCurrentView, setSelectedCreditId }) {
   const { user } = useAuth();
   const [credits, setCredits] = useState([]);
   const [loading, setLoading] = useState(true);

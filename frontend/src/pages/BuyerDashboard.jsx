@@ -5,7 +5,7 @@ import StatusBadge from "../components/StatusBadge";
 import LoadError from "../components/LoadError";
 import { RefreshCw, ArrowRight, Lock, X } from "lucide-react";
 
-export default function BuyerDashboard({ setCurrentView, setSelectedCreditId }) {
+export default function BuyerDashboard({ setCurrentView }) {
   const { user } = useAuth();
   const [transactions, setTransactions] = useState([]);
   const [allCredits, setAllCredits] = useState([]);

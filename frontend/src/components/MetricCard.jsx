@@ -1,6 +1,6 @@
 import React from "react";
 
-export default function MetricCard({ title, value, subtitle, icon: Icon, color = "slate", trend = null }) {
+export default function MetricCard({ title, value, subtitle, icon: Icon, trend = null }) {
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-4 relative">
       <div className="flex items-start justify-between">

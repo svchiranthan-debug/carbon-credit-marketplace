@@ -25,3 +25,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# ML: generated datasets and source cache (rebuild with backend/ml/build_real_dataset.py)
+backend/ml/dataset_real/
+backend/ml/.cache/

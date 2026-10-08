@@ -3,36 +3,6 @@ import api from "../services/api";
 
 const AuthContext = createContext(null);
 
-export const DEMO_ACCOUNTS = {
-  FARMER: {
-    email: "farmer@agrocarbon.demo",
-    password: "Demo@123",
-    role: "FARMER",
-    name: "Ramesh Kumar",
-    org: "Kaveri Smallholder Farmers Cooperative"
-  },
-  FARMER_2: {
-    email: "farmer2@agrocarbon.demo",
-    password: "Demo@123",
-    role: "FARMER",
-    name: "Lakshmi Devi",
-    org: "Coorg Sustainable Growers Alliance"
-  },
-  BUYER: {
-    email: "buyer@ecocorp.demo",
-    password: "Demo@123",
-    role: "BUYER",
-    name: "Arun Mehta",
-    org: "EcoCorp Solutions (ESG Portfolio)"
-  },
-  ADMIN: {
-    email: "admin@agrocarbon.demo",
-    password: "Demo@123",
-    role: "ADMIN",
-    name: "Dr. Sunita Rao",
-    org: "Carbon Verification Authority"
-  }
-};
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -88,12 +58,6 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  const loginDemoAccount = async (roleKey) => {
-    const creds = DEMO_ACCOUNTS[roleKey];
-    if (!creds) return;
-    return await login(creds.email, creds.password, creds.role);
-  };
-
   return (
     <AuthContext.Provider
       value={{
@@ -104,9 +68,7 @@ export function AuthProvider({ children }) {
         error,
         login,
         register,
-        logout,
-        loginDemoAccount,
-        DEMO_ACCOUNTS
+        logout
       }}
     >
       {children}
@@ -114,6 +76,8 @@ export function AuthProvider({ children }) {
   );
 }
 
+// The hook lives next to its provider on purpose (standard React context pattern).
+// eslint-disable-next-line react/only-export-components
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {

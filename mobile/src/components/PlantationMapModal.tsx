@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Alert
 } from "react-native";
-import MapView, { Marker, Region } from "react-native-maps";
+import MapView, { Marker, Polygon } from "react-native-maps";
 import * as Location from "expo-location";
 
 interface PlantationMapModalProps {
@@ -19,7 +19,25 @@ interface PlantationMapModalProps {
   initialLat?: number;
   initialLon?: number;
   onClose: () => void;
-  onLocationSelected: (lat: number, lon: number, locationName?: string) => void;
+  /** boundary: [[lat, lng], ...] when the farmer drew a polygon (>= 3 points); areaHa computed from it. */
+  onLocationSelected: (lat: number, lon: number, locationName?: string, boundary?: number[][], areaHa?: number) => void;
+}
+
+type LatLng = { latitude: number; longitude: number };
+
+/** Polygon area in hectares (local equal-area projection + shoelace; matches the backend). */
+export function polygonAreaHectares(points: LatLng[]): number {
+  if (points.length < 3) return 0;
+  const R = 6371008.8;
+  const lat0 = (points.reduce((s, p) => s + p.latitude, 0) / points.length) * (Math.PI / 180);
+  const xy = points.map((p) => [R * p.longitude * (Math.PI / 180) * Math.cos(lat0), R * p.latitude * (Math.PI / 180)]);
+  let a = 0;
+  for (let i = 0; i < xy.length; i++) {
+    const [x1, y1] = xy[i];
+    const [x2, y2] = xy[(i + 1) % xy.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(a) / 2 / 10000;
 }
 
 const PRESET_LOCATIONS: { name: string; lat: number; lon: number }[] = [
@@ -44,7 +62,10 @@ export default function PlantationMapModal({
   const [locating, setLocating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [locationName, setLocationName] = useState<string>("");
+  const [mode, setMode] = useState<"PIN" | "BOUNDARY">("PIN");
+  const [vertices, setVertices] = useState<LatLng[]>([]);
   const mapRef = useRef<MapView | null>(null);
+  const areaHa = polygonAreaHectares(vertices);
 
   useEffect(() => {
     if (visible) {
@@ -134,11 +155,27 @@ export default function PlantationMapModal({
   };
 
   const handleConfirmLocation = () => {
-    onLocationSelected(
-      selectedCoord.latitude,
-      selectedCoord.longitude,
-      locationName || `Karnataka (${selectedCoord.latitude.toFixed(4)}, ${selectedCoord.longitude.toFixed(4)})`
-    );
+    if (mode === "BOUNDARY") {
+      if (vertices.length < 3) {
+        Alert.alert("Boundary incomplete", "Tap at least 3 corners of the plot, or switch back to pin mode.");
+        return;
+      }
+      const lat = vertices.reduce((s, p) => s + p.latitude, 0) / vertices.length;
+      const lon = vertices.reduce((s, p) => s + p.longitude, 0) / vertices.length;
+      onLocationSelected(
+        lat,
+        lon,
+        locationName || `Boundary (${vertices.length} points, ${lat.toFixed(4)}, ${lon.toFixed(4)})`,
+        vertices.map((p) => [p.latitude, p.longitude]),
+        areaHa
+      );
+    } else {
+      onLocationSelected(
+        selectedCoord.latitude,
+        selectedCoord.longitude,
+        locationName || `${selectedCoord.latitude.toFixed(5)}, ${selectedCoord.longitude.toFixed(5)}`
+      );
+    }
     onClose();
   };
 
@@ -221,11 +258,21 @@ export default function PlantationMapModal({
             showsMyLocationButton={true}
             onPress={(e) => {
               const coord = e.nativeEvent.coordinate;
+              if (mode === "BOUNDARY") {
+                setVertices((v) => [...v, coord]);
+                return;
+              }
               setSelectedCoord(coord);
               setLocationName(`Geotagged (${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)})`);
             }}
           >
-            <Marker
+            {mode === "BOUNDARY" && vertices.length >= 3 && (
+              <Polygon coordinates={vertices} strokeColor="#166534" fillColor="rgba(22,101,52,0.25)" strokeWidth={2} />
+            )}
+            {mode === "BOUNDARY" && vertices.map((v, i) => (
+              <Marker key={`v${i}`} coordinate={v} pinColor="#166534" title={`Corner ${i + 1}`} />
+            ))}
+            {mode === "PIN" && <Marker
               coordinate={selectedCoord}
               draggable
               onDragEnd={(e) => {
@@ -235,13 +282,15 @@ export default function PlantationMapModal({
               }}
               title="Plantation Geotag"
               description="Farm center coordinates for Sentinel-2 satellite MRV"
-            />
+            />}
           </MapView>
 
           {/* Floating Instructions Pill */}
           <View style={styles.floatingGuide}>
             <Text style={styles.floatingGuideText}>
-              👆 Tap anywhere on the map or drag the pin to position plantation center
+              {mode === "BOUNDARY"
+                ? "👆 Tap each corner of your plot in order"
+                : "👆 Tap anywhere on the map or drag the pin to position plantation center"}
             </Text>
           </View>
         </View>
@@ -258,9 +307,32 @@ export default function PlantationMapModal({
             </View>
           </View>
 
-          <Text style={styles.boundaryNote}>
-            ℹ️ Mobile pin geotagging sets the farm center. Multi-vertex polygon boundary drawing is available in the Web Portal GIS editor.
-          </Text>
+          <View style={styles.modeRow}>
+            <TouchableOpacity style={[styles.modeBtn, mode === "PIN" && styles.modeBtnActive]} onPress={() => setMode("PIN")}>
+              <Text style={[styles.modeBtnText, mode === "PIN" && styles.modeBtnTextActive]}>📍 Centre pin</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.modeBtn, mode === "BOUNDARY" && styles.modeBtnActive]} onPress={() => setMode("BOUNDARY")}>
+              <Text style={[styles.modeBtnText, mode === "BOUNDARY" && styles.modeBtnTextActive]}>⬠ Draw boundary</Text>
+            </TouchableOpacity>
+          </View>
+          {mode === "BOUNDARY" ? (
+            <View style={styles.modeRow}>
+              <Text style={[styles.boundaryNote, { flex: 1 }]}>
+                {vertices.length} corner{vertices.length === 1 ? "" : "s"}
+                {vertices.length >= 3 ? ` • ${areaHa.toFixed(4)} ha (${(areaHa * 2.4710538).toFixed(2)} acres)` : " • need at least 3"}
+              </Text>
+              <TouchableOpacity onPress={() => setVertices((v) => v.slice(0, -1))} disabled={!vertices.length}>
+                <Text style={styles.linkText}>Undo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setVertices([])} disabled={!vertices.length}>
+                <Text style={styles.linkText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={styles.boundaryNote}>
+              ℹ️ A centre pin only: satellite NDVI will use a square of the plot's area. Draw the boundary for a more accurate measurement.
+            </Text>
+          )}
 
           <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirmLocation}>
             <Text style={styles.confirmBtnText}>✓ SAVE LOCATION COORDINATES</Text>
@@ -272,6 +344,12 @@ export default function PlantationMapModal({
 }
 
 const styles = StyleSheet.create({
+  modeRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  modeBtn: { flex: 1, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: "#CBD5E1", alignItems: "center" },
+  modeBtnActive: { backgroundColor: "#1B3B2B", borderColor: "#1B3B2B" },
+  modeBtnText: { fontSize: 12, fontWeight: "700", color: "#334155" },
+  modeBtnTextActive: { color: "#FFFFFF" },
+  linkText: { fontSize: 12, fontWeight: "700", color: "#166534", paddingHorizontal: 6 },
   container: {
     flex: 1,
     backgroundColor: "#FFFFFF"
