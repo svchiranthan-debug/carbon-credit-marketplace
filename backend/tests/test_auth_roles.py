@@ -5,7 +5,7 @@ from conftest import login, plantation_payload, register
 
 
 def test_register_and_login_each_self_service_role(client):
-    for role in ("FARMER", "BUYER", "AUDITOR"):
+    for role in ("FARMER", "BUYER"):
         email = f"{role.lower()}_{uuid.uuid4().hex[:8]}@test.example"
         r = client.post("/api/auth/register", json={"email": email, "password": "TestPass@123", "full_name": f"{role} One", "role": role})
         assert r.status_code == 201, r.text
@@ -16,9 +16,26 @@ def test_register_and_login_each_self_service_role(client):
         assert me.json()["email"] == email
 
 
-def test_admin_role_cannot_self_register(client):
-    r = client.post("/api/auth/register", json={"email": f"x{uuid.uuid4().hex[:6]}@test.example", "password": "TestPass@123", "full_name": "X", "role": "ADMIN"})
-    assert r.status_code == 422
+def test_admin_and_auditor_roles_cannot_self_register(client):
+    for role in ("ADMIN", "AUDITOR"):
+        r = client.post("/api/auth/register", json={"email": f"x{uuid.uuid4().hex[:6]}@test.example", "password": "TestPass@123", "full_name": "X", "role": role})
+        assert r.status_code == 422, role
+    assert "administrator" in str(r.json()["detail"])
+
+
+def test_only_admin_can_create_auditors(client):
+    body = {"email": f"aud_{uuid.uuid4().hex[:6]}@test.example", "password": "TestPass@123", "full_name": "New Auditor", "role": "AUDITOR"}
+    farmer, _ = register(client, "FARMER")
+    auditor, _ = register(client, "AUDITOR")
+    assert client.post("/api/users", json=body).status_code == 401
+    assert client.post("/api/users", headers=farmer, json=body).status_code == 403
+    assert client.post("/api/users", headers=auditor, json=body).status_code == 403
+    admin = login(client, "admin@agrocarbon.demo")
+    r = client.post("/api/users", headers=admin, json=body)
+    assert r.status_code == 201 and r.json()["role"] == "AUDITOR"
+    assert client.post("/api/users", headers=admin, json=body).status_code == 400  # duplicate email
+    assert client.post("/api/users", headers=admin, json={**body, "email": "x" + body["email"], "role": "ADMIN"}).status_code == 422
+    assert client.post("/api/auth/login", json={"email": body["email"], "password": "TestPass@123"}).json()["user"]["role"] == "AUDITOR"
 
 
 def test_registration_validation(client):

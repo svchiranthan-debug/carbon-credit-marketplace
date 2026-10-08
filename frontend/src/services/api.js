@@ -249,6 +249,11 @@ class ApiService {
     return await this.updateAdminDecision(verificationId, decision, notes);
   }
 
+  async createUser(userData) {
+    // ADMIN only. The only way to create AUDITOR accounts.
+    return await this.request("/users", { method: "POST", body: JSON.stringify(userData) });
+  }
+
   async getAuditLogs() {
     return await this.request("/admin/audit-logs");
   }

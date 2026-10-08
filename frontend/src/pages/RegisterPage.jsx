@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import { Lock, Mail, User, AlertCircle, ArrowRight, ShieldCheck, ShoppingBag, Trees, CheckCircle } from "lucide-react";
+import { Lock, Mail, User, AlertCircle, ArrowRight, ShoppingBag, Trees, CheckCircle } from "lucide-react";
 
 const ROLE_OPTIONS = [
   {
@@ -15,13 +15,8 @@ const ROLE_OPTIONS = [
     description: "Acquire verified carbon assets and manage retirement",
     icon: ShoppingBag,
   },
-  {
-    id: "AUDITOR",
-    title: "Auditor",
-    description: "Review verification evidence and audit carbon asset records",
-    icon: ShieldCheck,
-  },
 ];
+// Auditor accounts can approve plantations, so they are created by a platform admin, not by sign-up.
 
 export default function RegisterPage({ setCurrentView, portalRole, setPortalRole }) {
   const { register } = useAuth();
@@ -30,7 +25,7 @@ export default function RegisterPage({ setCurrentView, portalRole, setPortalRole
     email: "",
     password: "",
     confirm_password: "",
-    role: portalRole || "", // Pre-select role if clicked from portal card
+    role: portalRole === "FARMER" || portalRole === "BUYER" ? portalRole : "", // Pre-select from portal card
     phone: "",
     organization: ""
   });
@@ -243,6 +238,12 @@ export default function RegisterPage({ setCurrentView, portalRole, setPortalRole
               </label>
 
               <div className="space-y-2">
+                {portalRole === "AUDITOR" && (
+                  <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+                    Auditor accounts are created by the platform administrator. Ask your admin for an
+                    auditor login, or register below as a farmer or buyer.
+                  </p>
+                )}
                 {ROLE_OPTIONS.map((opt) => {
                   const Icon = opt.icon;
                   const isSelected = formData.role === opt.id;

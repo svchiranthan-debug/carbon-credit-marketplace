@@ -4,7 +4,10 @@ from typing import Any, Optional, List, Dict
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-SELF_REGISTER_ROLES = {"FARMER", "BUYER", "AUDITOR"}
+# Public sign-up. AUDITOR accounts can approve plantations, so only an ADMIN may create them
+# (POST /api/users); ADMIN accounts are created with seed_data.py or directly in the database.
+SELF_REGISTER_ROLES = {"FARMER", "BUYER"}
+ADMIN_CREATABLE_ROLES = {"FARMER", "BUYER", "AUDITOR"}
 
 
 def _clean(value: Optional[str]) -> Optional[str]:
@@ -45,6 +48,20 @@ class UserCreate(UserBase):
     def _role(cls, v: str) -> str:
         v = (v or "").strip().upper()
         if v not in SELF_REGISTER_ROLES:
+            if v == "AUDITOR":
+                raise ValueError("Auditor accounts are created by a platform administrator.")
+            raise ValueError("Role must be FARMER or BUYER.")
+        return v
+
+
+class AdminUserCreate(UserCreate):
+    """Used by an ADMIN to create accounts, including AUDITOR."""
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if v not in ADMIN_CREATABLE_ROLES:
             raise ValueError("Role must be one of FARMER, BUYER, AUDITOR.")
         return v
 

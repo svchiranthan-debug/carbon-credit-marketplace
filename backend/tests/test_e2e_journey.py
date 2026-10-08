@@ -18,7 +18,14 @@ from conftest import TEST_NDVI, plantation_payload, synthetic_image_bytes
 
 def _register(base, role):
     email = f"e2e_{role.lower()}_{uuid.uuid4().hex[:6]}@test.example"
-    r = requests.post(f"{base}/auth/register", json={"email": email, "password": "TestPass@123", "full_name": f"E2E {role}", "role": role})
+    body = {"email": email, "password": "TestPass@123", "full_name": f"E2E {role}", "role": role}
+    if role == "AUDITOR":  # auditors are created by an admin, then log in
+        admin_tok = requests.post(f"{base}/auth/login", json={"email": "admin@agrocarbon.demo", "password": "Demo@123"}).json()["access_token"]
+        r = requests.post(f"{base}/users", headers={"Authorization": f"Bearer {admin_tok}"}, json=body)
+        assert r.status_code == 201, r.text
+        r = requests.post(f"{base}/auth/login", json={"email": email, "password": "TestPass@123"})
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    r = requests.post(f"{base}/auth/register", json=body)
     assert r.status_code == 201, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 

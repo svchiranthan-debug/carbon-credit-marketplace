@@ -82,10 +82,17 @@ def synthetic_image_bytes(kind: str = "plantation", seed: int = 7, fmt: str = "J
 
 
 def register(client, role: str, name: str = "Test User"):
+    """Self-registers FARMER/BUYER; AUDITOR accounts are created by the seeded admin, then logged in."""
     email = f"{role.lower()}_{uuid.uuid4().hex[:10]}@test.example"
-    r = client.post("/api/auth/register", json={
-        "email": email, "password": "TestPass@123", "full_name": name, "role": role,
-    })
+    body = {"email": email, "password": "TestPass@123", "full_name": name, "role": role}
+    if role == "AUDITOR":
+        admin = login(client, "admin@agrocarbon.demo")
+        r = client.post("/api/users", headers=admin, json=body)
+        assert r.status_code == 201, r.text
+        r = client.post("/api/auth/login", json={"email": email, "password": "TestPass@123"})
+        assert r.status_code == 200, r.text
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}, r.json()["user"]
+    r = client.post("/api/auth/register", json=body)
     assert r.status_code == 201, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}, r.json()["user"]
 

@@ -4,6 +4,7 @@ import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
 import LoadError from "../components/LoadError";
 import MetricCard from "../components/MetricCard";
+import CreateAuditorPanel from "../components/CreateAuditorPanel";
 import { 
   ShieldCheck, 
   Users, 
@@ -297,6 +298,8 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
           </div>
         </div>
       )}
+
+      {user?.role === "ADMIN" && <CreateAuditorPanel />}
 
       {/* System Audit Log */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
