@@ -1,4 +1,30 @@
-const API_BASE = "http://localhost:8000/api";
+// Backend origin. Override with VITE_API_BASE_URL in frontend/.env (e.g. http://192.168.1.20:8000).
+export const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
+const API_BASE = `${API_ORIGIN}/api`;
+
+/** Turns FastAPI error bodies (string or 422 validation list) into one readable message. */
+function formatErrorDetail(detail, status) {
+  if (!detail) return `Request failed (HTTP ${status})`;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        const field = Array.isArray(d.loc) ? d.loc.filter((p) => p !== "body").join(".") : "";
+        const msg = (d.msg || "").replace(/^Value error, /, "");
+        return field ? `${field}: ${msg}` : msg;
+      })
+      .join("; ");
+  }
+  return JSON.stringify(detail);
+}
+
+export class ApiError extends Error {
+  constructor(message, status, isNetworkError = false) {
+    super(message);
+    this.status = status;
+    this.isNetworkError = isNetworkError;
+  }
+}
 
 class ApiService {
   getToken() {
@@ -27,33 +53,33 @@ class ApiService {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
+    let res;
     try {
-      const res = await fetch(`${API_BASE}${endpoint}`, {
-        ...options,
-        headers,
-      });
-
-      if (res.status === 401) {
-        // Clear token on 401
-        this.setToken(null);
-      }
-
-      if (!res.ok) {
-        let errorMsg = `HTTP Error ${res.status}`;
-        try {
-          const errData = await res.json();
-          errorMsg = errData.detail || errorMsg;
-        } catch {
-          // Ignore JSON parse error on non-json response
-        }
-        throw new Error(errorMsg);
-      }
-
-      return await res.json();
-    } catch (err) {
-      console.error(`API Error on [${options.method || 'GET'} ${endpoint}]:`, err.message);
-      throw err;
+      res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
+    } catch {
+      throw new ApiError(
+        `Cannot reach the backend at ${API_ORIGIN}. Make sure the FastAPI server is running.`,
+        0,
+        true
+      );
     }
+
+    if (res.status === 401) {
+      this.setToken(null);
+    }
+
+    if (!res.ok) {
+      let detail = null;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        // non-JSON error body
+      }
+      throw new ApiError(formatErrorDetail(detail, res.status), res.status);
+    }
+
+    if (res.status === 204) return null;
+    return await res.json();
   }
 
   // --- AUTH ---
@@ -126,6 +152,10 @@ class ApiService {
     return await this.request(`/plantations/${plantationId}/verification`);
   }
 
+  async getVerificationHistory(plantationId) {
+    return await this.request(`/plantations/${plantationId}/verifications`);
+  }
+
   async getVerificationById(verificationId) {
     return await this.request(`/verifications/${verificationId}`);
   }
@@ -137,10 +167,10 @@ class ApiService {
     });
   }
 
-  async generateCredits(plantationId, pricePerTco2e = 1500) {
+  async generateCredits(plantationId, pricePerTco2e = null) {
     return await this.request(`/plantations/${plantationId}/generate-credits`, {
       method: "POST",
-      body: JSON.stringify({ price_per_tco2e: pricePerTco2e }),
+      body: JSON.stringify(pricePerTco2e ? { price_per_tco2e: pricePerTco2e } : {}),
     });
   }
 
@@ -173,7 +203,7 @@ class ApiService {
   async purchaseCredit(creditId, quantity = null) {
     return await this.request(`/marketplace/credits/${creditId}/purchase`, {
       method: "POST",
-      body: JSON.stringify({ quantity_tco2e: quantity }),
+      body: JSON.stringify(quantity ? { quantity_tco2e: quantity } : {}),
     });
   }
 
@@ -185,6 +215,10 @@ class ApiService {
 
   async getBlockchainRecord(creditId) {
     return await this.request(`/marketplace/credits/${creditId}/blockchain-record`);
+  }
+
+  async getBlockchainStatus() {
+    return await this.request("/blockchain/status");
   }
 
   async listTransactions() {
@@ -226,7 +260,7 @@ export function getImageUrl(path) {
     return path;
   }
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  return `http://localhost:8000${cleanPath}`;
+  return `${API_ORIGIN}${cleanPath}`;
 }
 
 export const api = new ApiService();

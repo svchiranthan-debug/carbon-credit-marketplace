@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
+import LoadError from "../components/LoadError";
 import { RefreshCw, ArrowRight, Lock, X } from "lucide-react";
 
 export default function BuyerDashboard({ setCurrentView, setSelectedCreditId }) {
@@ -9,21 +10,23 @@ export default function BuyerDashboard({ setCurrentView, setSelectedCreditId }) 
   const [transactions, setTransactions] = useState([]);
   const [allCredits, setAllCredits] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [retiringCreditId, setRetiringCreditId] = useState(null);
   const [retirementModalCredit, setRetirementModalCredit] = useState(null);
   const [retiredEvent, setRetiredEvent] = useState(null);
 
   const loadData = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const [txList, crList] = await Promise.all([
-        api.listTransactions().catch(() => []),
-        api.listMarketplaceCredits({ status: "ALL" }).catch(() => [])
+        api.listTransactions(),
+        api.getMyCredits()
       ]);
       setTransactions(txList || []);
       setAllCredits(crList || []);
     } catch (err) {
-      console.error("Failed loading buyer dashboard:", err);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -34,8 +37,8 @@ export default function BuyerDashboard({ setCurrentView, setSelectedCreditId }) 
   }, []);
 
   // Compute portfolio metrics
-  const myCredits = allCredits.filter(c => c.owner_id === user?.id || transactions.some(tx => tx.credit_id === c.id));
-  const carbonAcquiredTCO2e = transactions.reduce((acc, tx) => acc + tx.quantity_tco2e, 0) || (myCredits.length > 0 ? 52.0 : 0);
+  const myCredits = allCredits.filter(c => c.owner_id === user?.id);
+  const carbonAcquiredTCO2e = transactions.reduce((acc, tx) => acc + tx.quantity_tco2e, 0);
   const carbonRetiredTCO2e = myCredits.filter(c => c.is_retired || c.status === "RETIRED").reduce((acc, c) => acc + c.carbon_quantity_tco2e, 0);
   const activeAssetsCount = myCredits.filter(c => !c.is_retired && c.status !== "RETIRED").length;
 
@@ -46,12 +49,13 @@ export default function BuyerDashboard({ setCurrentView, setSelectedCreditId }) 
       setRetiredEvent({
         creditId: credit.id,
         quantity: credit.carbon_quantity_tco2e,
-        txHash: res.blockchain_tx_hash || "0x7d44fc7b72f23dc80df5db95baaad6457038e53a15107ee6951d59a5e29234e0",
+        txHash: res.blockchain_tx_hash || null,
+        chainStatus: res.blockchain_status,
       });
       setRetirementModalCredit(null);
       loadData();
     } catch (err) {
-      alert(`Retirement failed: ${err.message}`);
+      setLoadError(`Retirement failed: ${err.message}`);
     } finally {
       setRetiringCreditId(null);
     }
@@ -59,6 +63,7 @@ export default function BuyerDashboard({ setCurrentView, setSelectedCreditId }) 
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-8 text-xs text-slate-800">
+      <LoadError message={loadError} onRetry={loadData} />
       {/* 1. Header */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 border-b border-slate-200 pb-3">
         <div>
@@ -115,7 +120,7 @@ export default function BuyerDashboard({ setCurrentView, setSelectedCreditId }) 
           </p>
 
           <div className="bg-slate-50 p-2.5 rounded border border-slate-200 text-[11px] font-mono text-slate-600 break-all">
-            Blockchain Retirement Tx: {retiredEvent.txHash.startsWith("0x") ? retiredEvent.txHash : `0x${retiredEvent.txHash}`}
+            Blockchain Retirement Tx: {retiredEvent.txHash || `— (${retiredEvent.chainStatus || "NOT_RECORDED"}: not recorded on-chain)`}
           </div>
         </div>
       )}

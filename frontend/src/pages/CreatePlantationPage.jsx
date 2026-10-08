@@ -8,9 +8,9 @@ import {
   FileImage, 
   AlertCircle, 
   Check, 
-  Trees, 
-  MapPin, 
-  FileText
+  
+  
+
 } from "lucide-react";
 
 export default function CreatePlantationPage({ setCurrentView, setSelectedPlantationId }) {

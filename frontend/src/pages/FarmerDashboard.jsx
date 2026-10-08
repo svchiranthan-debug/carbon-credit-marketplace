@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
+import LoadError from "../components/LoadError";
 import { ArrowRight, RefreshCw, Plus } from "lucide-react";
 
 export default function FarmerDashboard({ setCurrentView, setSelectedPlantationId }) {
@@ -9,18 +10,20 @@ export default function FarmerDashboard({ setCurrentView, setSelectedPlantationI
   const [plantations, setPlantations] = useState([]);
   const [credits, setCredits] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   const fetchData = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const [plList, crList] = await Promise.all([
         api.listPlantations(),
-        api.listMarketplaceCredits()
+        api.getMyCredits()
       ]);
       setPlantations(plList || []);
       setCredits(crList || []);
     } catch (err) {
-      console.error("Failed loading farmer dashboard data:", err);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -42,6 +45,7 @@ export default function FarmerDashboard({ setCurrentView, setSelectedPlantationI
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-8 text-xs text-slate-800">
+      <LoadError message={loadError} onRetry={fetchData} />
       {/* 1. Header with Authenticated Registered User Name */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 border-b border-slate-200 pb-4">
         <div>

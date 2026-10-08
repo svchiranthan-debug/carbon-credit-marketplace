@@ -2,21 +2,24 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api, { getImageUrl } from "../services/api";
 import StatusBadge from "../components/StatusBadge";
-import { ShieldCheck, RefreshCw, ArrowRight, FileImage, CheckCircle, Clock, AlertTriangle, XCircle, MapPin, Calendar } from "lucide-react";
+import LoadError from "../components/LoadError";
+import { ShieldCheck, RefreshCw, ArrowRight, FileImage, AlertTriangle, MapPin, Calendar } from "lucide-react";
 
 export default function AuditorQueuePage({ setCurrentView, setSelectedPlantationId }) {
   const { user } = useAuth();
   const [queue, setQueue] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [filterStatus, setFilterStatus] = useState("ALL");
 
   const loadQueue = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.getVerificationQueue();
       setQueue(data || []);
     } catch (err) {
-      console.error("Failed loading auditor verification queue:", err);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -38,6 +41,7 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6 text-xs text-slate-800">
+      <LoadError message={loadError} onRetry={loadQueue} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-3 border-b border-slate-200 pb-4">
         <div>
@@ -110,7 +114,7 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
 
               return (
                 <div
-                  key={item.id}
+                  key={item.id || `preview-${item.plantation_id}`}
                   className="bg-white border border-slate-200 rounded p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 hover:border-slate-300 transition shadow-xs"
                 >
                   {/* Left: Thumbnail & Main Info */}
@@ -146,7 +150,7 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
                         </span>
                         <span className="text-slate-300">•</span>
                         <h2 className="text-sm font-bold text-slate-900">
-                          {item.plantation_name || "Agroforestry Plot"}
+                          {item.plantation_name || "—"}
                         </h2>
                         <StatusBadge status={item.decision} size="sm" />
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${
@@ -156,16 +160,16 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
                             ? "bg-amber-100 text-amber-900 border-amber-300"
                             : "bg-emerald-100 text-emerald-900 border-emerald-300"
                         }`}>
-                          {item.risk_level || "LOW"} RISK ({item.risk_score || 0})
+                          {item.risk_level ? `${item.risk_level} RISK (${item.risk_score})` : "RISK NOT ASSESSED"}
                         </span>
                       </div>
 
                       <div className="flex items-center gap-3 text-slate-500 text-[11px] flex-wrap">
-                        <span>Farmer: <strong className="text-slate-700">{item.farmer_name || "Farmer"}</strong></span>
+                        <span>Farmer: <strong className="text-slate-700">{item.farmer_name || "—"}</strong></span>
                         <span>•</span>
                         <div className="flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-slate-400" />
-                          <span>{item.location || "Karnataka, India"}</span>
+                          <span>{item.location || "—"}</span>
                         </div>
                         <span>•</span>
                         <div className="flex items-center gap-1">
@@ -181,9 +185,9 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
                           Boundary: {item.area_hectares ? `${item.area_hectares} ha` : "Provided"}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                          item.is_real_satellite ? "bg-emerald-50 text-emerald-900 border-emerald-200" : "bg-slate-100 text-slate-700 border-slate-200"
+                          item.ndvi_provenance === "SENTINEL2_COMPUTED" ? "bg-emerald-50 text-emerald-900 border-emerald-200" : "bg-slate-100 text-slate-700 border-slate-200"
                         }`}>
-                          {item.is_real_satellite ? "Sentinel-2 Real Data" : "Satellite Simulator"}
+                          NDVI: {item.ndvi_provenance === "SENTINEL2_COMPUTED" ? "Sentinel-2 computed" : item.ndvi_provenance === "REPORTED" ? "Reported" : "Not available"}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                           hasGroundImage ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-amber-50 text-amber-800 border-amber-200"

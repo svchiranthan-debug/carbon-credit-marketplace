@@ -6,7 +6,7 @@ import {
   ShoppingBag, 
   FileText, 
   ShieldCheck, 
-  Users, 
+  
   Award,
   X,
   LogOut

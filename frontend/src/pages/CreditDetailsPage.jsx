@@ -4,17 +4,17 @@ import api, { getImageUrl } from "../services/api";
 import StatusBadge from "../components/StatusBadge";
 import { 
   ArrowLeft, 
-  ArrowRight,
-  CheckCircle,
+  
+  
   RefreshCw,
   X,
-  ShieldCheck,
-  Lock,
+  
+  
   FileImage
 } from "lucide-react";
 
 export default function CreditDetailsPage({ creditId, setCurrentView, setSelectedPlantationId }) {
-  const { user, isAuthenticated, role, loginDemoAccount } = useAuth();
+  const { isAuthenticated, role } = useAuth();
   const [credit, setCredit] = useState(null);
   const [blockchainRecord, setBlockchainRecord] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -22,6 +22,7 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
   const [transactionSuccess, setTransactionSuccess] = useState(null);
   const [error, setError] = useState(null);
+  const [purchaseError, setPurchaseError] = useState(null);
 
   const loadDetails = async () => {
     setLoading(true);
@@ -29,6 +30,7 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
     try {
       const [crData, bcData] = await Promise.all([
         api.getCreditDetail(creditId),
+        // The provenance panel degrades to "unavailable" on its own; a failure here must not hide the credit.
         api.getBlockchainRecord(creditId).catch(() => null)
       ]);
       setCredit(crData);
@@ -49,18 +51,14 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
   }, [creditId]);
 
   const handlePurchase = async () => {
-    if (!isAuthenticated) {
-      alert("Please log in as a Corporate Buyer to acquire carbon assets.");
-      return;
-    }
-
     setPurchasing(true);
+    setPurchaseError(null);
     try {
       const res = await api.purchaseCredit(credit.id);
       setTransactionSuccess(res);
       setShowPurchaseModal(false);
     } catch (err) {
-      alert(`Asset acquisition failed: ${err.message}`);
+      setPurchaseError(err.message);
     } finally {
       setPurchasing(false);
     }
@@ -68,12 +66,13 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
 
   // 1. Transaction Receipt / Ownership Transferred Screen
   if (transactionSuccess) {
-    const qty = transactionSuccess.quantity_tco2e || credit?.carbon_quantity_tco2e || 25;
-    const plantationName = transactionSuccess.plantation_name || credit?.plantation_name || "Kaveri Basin Agroforestry Plot";
-    const totalVal = transactionSuccess.total_amount || (qty * (credit?.price_per_tco2e || 1500));
-    const txnId = transactionSuccess.id || "TXN-2026-XXXX";
-    const crId = transactionSuccess.credit_id || credit?.id || creditId || "CC-2026-001";
-    const bcHash = transactionSuccess.blockchain_tx_hash || credit?.blockchain_tx_hash || "0x005b1a8c11b6b0f6b0843b0a3908914757f0778674071c27dde91ee1874059c9";
+    const qty = transactionSuccess.quantity_tco2e;
+    const plantationName = transactionSuccess.plantation_name || credit?.plantation_name || "—";
+    const totalVal = transactionSuccess.total_amount;
+    const txnId = transactionSuccess.id;
+    const crId = transactionSuccess.credit_id;
+    const bcHash = transactionSuccess.blockchain_tx_hash;
+    const onChain = transactionSuccess.blockchain_status === "CONFIRMED" && Boolean(bcHash);
 
     return (
       <div className="max-w-lg mx-auto px-4 py-12 text-xs text-slate-800">
@@ -82,7 +81,9 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Transaction Confirmed</span>
             <h2 className="text-xl font-bold text-slate-900 tracking-tight">Ownership Transferred</h2>
             <p className="text-slate-500 text-xs">
-              The carbon asset custody has been transferred on the blockchain registry.
+              {onChain
+                ? "Ownership was transferred on the local smart contract."
+                : "Ownership was recorded in the platform database (not on-chain)."}
             </p>
           </div>
 
@@ -109,12 +110,12 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Blockchain Status:</span>
-              <span className="font-semibold text-forest-900">Recorded (Confirmed)</span>
+              <span className="font-semibold text-slate-900">{transactionSuccess.blockchain_status || "NOT_RECORDED"}</span>
             </div>
             <div className="pt-1">
               <span className="text-slate-400 block text-[10px]">Blockchain Transaction Hash:</span>
               <span className="font-mono text-[10px] text-slate-700 break-all font-medium">
-                {bcHash.startsWith("0x") ? bcHash : `0x${bcHash}`}
+                {bcHash || "— (not recorded on-chain)"}
               </span>
             </div>
           </div>
@@ -176,14 +177,16 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
     );
   }
 
-  const isAvailable = credit.status === "AVAILABLE";
+  // Purchasable only if the backend says the credit passes every marketplace rule.
+  const isAvailable = credit.status === "AVAILABLE" && credit.is_listed === true;
   const isAcquired = credit.status === "SOLD";
   const isRetired = credit.is_retired || credit.status === "RETIRED";
   const totalAmount = credit.carbon_quantity_tco2e * credit.price_per_tco2e;
-  const contractAddress = credit.blockchain_contract_address || (blockchainRecord && blockchainRecord.contract_address) || "0x21a59654176f2689d12E828B77a783072CD26680";
-  const rawTxHash = credit.blockchain_tx_hash || (blockchainRecord && blockchainRecord.transaction_hash) || "0x005b1a8c11b6b0f6b0843b0a3908914757f0778674071c27dde91ee1874059c9";
-  const formattedTxHash = rawTxHash.startsWith("0x") ? rawTxHash : `0x${rawTxHash}`;
-  const reportHash = credit.report_hash || (blockchainRecord && blockchainRecord.report_hash) || "8e7f855dd2f2be26ce6aa58b8a586e80b7b9e44dcfed47de9e2955b8206ac138";
+  const onChain = Boolean(blockchainRecord?.on_chain);
+  const contractAddress = (onChain && blockchainRecord.contract_address) || credit.blockchain_contract_address || "—";
+  const formattedTxHash = credit.blockchain_tx_hash || "— (not recorded on-chain)";
+  const reportHash = credit.report_hash || "—";
+  const chainStatus = credit.blockchain_status || "NOT_RECORDED";
 
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 space-y-6 text-xs text-slate-800">
@@ -329,7 +332,7 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
           <div>
             <span className="text-slate-400 block text-[11px]">Verification Score</span>
             <span className="font-mono font-bold text-slate-900 text-sm">
-              {credit.verification_score ? `${credit.verification_score} / 100` : "Verified"}
+              {credit.verification_score != null ? `${credit.verification_score} / 100` : "—"}
             </span>
           </div>
 
@@ -363,7 +366,7 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
             Provenance
           </h2>
           <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
-            Blockchain Verified
+            {onChain ? "Read from smart contract" : "Database record only"}
           </span>
         </div>
 
@@ -399,10 +402,22 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
             </span>
           </div>
 
+          {onChain && (
+            <div className="flex justify-between">
+              <span className="text-slate-500">On-chain owner:</span>
+              <span className="font-mono text-slate-800 text-[11px] truncate max-w-[240px]">{blockchainRecord.owner_address}</span>
+            </div>
+          )}
+
           <div className="flex justify-between pt-1">
-            <span className="text-slate-500">Status:</span>
-            <span className="font-semibold text-forest-900">Confirmed</span>
+            <span className="text-slate-500">Chain status:</span>
+            <span className="font-semibold text-slate-900">{chainStatus}</span>
           </div>
+          {!onChain && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+              {blockchainRecord?.note || "No on-chain record could be read for this credit."}
+            </p>
+          )}
         </div>
 
         <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-100">
@@ -423,8 +438,9 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
           <button
             onClick={() => {
               if (!isAuthenticated || role !== "BUYER") {
-                loginDemoAccount("BUYER").then(() => setShowPurchaseModal(true));
+                setCurrentView("login");
               } else {
+                setPurchaseError(null);
                 setShowPurchaseModal(true);
               }
             }}
@@ -434,7 +450,7 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
           </button>
         ) : (
           <span className="text-slate-500 font-medium px-3 py-1 bg-slate-100 rounded text-xs">
-            {isRetired ? "Retired on Blockchain" : "Acquired / In Custody"}
+            {isRetired ? "Retired" : isAcquired ? "Acquired / In Custody" : "Not available for purchase"}
           </span>
         )}
       </div>
@@ -475,8 +491,14 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
             </div>
 
             <p className="text-[11px] text-slate-400 italic">
-              Prototype transaction — no real payment was processed. Ownership will be transferred on the local smart contract.
+              Prototype transaction — no real payment is processed.
+              {credit.blockchain_status === "CONFIRMED"
+                ? " Ownership will also be transferred on the local smart contract."
+                : " This credit is not on-chain; ownership is tracked in the platform database."}
             </p>
+            {purchaseError && (
+              <p className="text-[11px] text-rose-800 bg-rose-50 border border-rose-200 rounded p-2">{purchaseError}</p>
+            )}
 
             <div className="flex justify-end gap-2 pt-2">
               <button

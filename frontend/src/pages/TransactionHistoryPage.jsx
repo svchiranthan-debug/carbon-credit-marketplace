@@ -2,15 +2,16 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
+import LoadError from "../components/LoadError";
 import { 
-  History, 
+  
   Search, 
-  Download, 
+  
   FileText, 
-  ShieldCheck, 
+  
   RefreshCw,
-  Trees,
-  ArrowLeft,
+  
+  
   X
 } from "lucide-react";
 
@@ -18,16 +19,18 @@ export default function TransactionHistoryPage({ setCurrentView, setSelectedCred
   const { user } = useAuth();
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTx, setSelectedTx] = useState(null);
 
   const fetchTransactions = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.listTransactions();
       setTransactions(data || []);
     } catch (err) {
-      console.error("Failed to load transactions:", err);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -47,6 +50,7 @@ export default function TransactionHistoryPage({ setCurrentView, setSelectedCred
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6 text-xs">
+      <LoadError message={loadError} onRetry={fetchTransactions} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
         <div>

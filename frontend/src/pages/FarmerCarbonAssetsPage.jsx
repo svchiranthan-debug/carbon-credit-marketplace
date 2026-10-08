@@ -1,21 +1,24 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
-import api, { getImageUrl } from "../services/api";
+import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
-import { Award, RefreshCw, ArrowRight, ShieldCheck, CheckCircle, Lock, ExternalLink, FileText, Trees } from "lucide-react";
+import LoadError from "../components/LoadError";
+import { Award, RefreshCw, ArrowRight, CheckCircle, Trees } from "lucide-react";
 
 export default function FarmerCarbonAssetsPage({ setCurrentView, setSelectedCreditId, setSelectedPlantationId }) {
   const { user } = useAuth();
   const [credits, setCredits] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   const fetchCredits = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.getMyCredits();
       setCredits(data || []);
     } catch (err) {
-      console.error("Failed to load farmer carbon assets:", err);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -32,6 +35,7 @@ export default function FarmerCarbonAssetsPage({ setCurrentView, setSelectedCred
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-6 text-xs text-slate-800">
+      <LoadError message={loadError} onRetry={fetchCredits} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-3 border-b border-slate-200 pb-4">
         <div>
@@ -210,20 +214,20 @@ export default function FarmerCarbonAssetsPage({ setCurrentView, setSelectedCred
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                     <span className="font-mono font-bold text-slate-900">{c.id}</span>
                     <span className="font-semibold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] border border-emerald-200">
-                      PROVENANCE: VERIFIED
+                      CHAIN: {c.blockchain_status || "NOT_RECORDED"}
                     </span>
                   </div>
 
                   <div className="space-y-1 font-mono text-[10px] text-slate-600">
                     <div className="flex justify-between">
                       <span className="text-slate-400">Smart Contract:</span>
-                      <span className="truncate max-w-[200px]">{c.blockchain_contract_address || "0x94dFeceb91678ec912ef8f14c72721c102ed2Df7"}</span>
+                      <span className="truncate max-w-[200px]">{c.blockchain_contract_address || "—"}</span>
                     </div>
 
                     <div className="flex justify-between">
                       <span className="text-slate-400">Transaction Hash:</span>
                       <span className="truncate max-w-[200px] text-slate-900 font-medium">
-                        {c.blockchain_tx_hash ? (c.blockchain_tx_hash.startsWith("0x") ? c.blockchain_tx_hash : `0x${c.blockchain_tx_hash}`) : "Confirmed on-chain"}
+                        {c.blockchain_tx_hash ? c.blockchain_tx_hash : "— (not recorded on-chain)"}
                       </span>
                     </div>
                   </div>

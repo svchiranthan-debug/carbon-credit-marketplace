@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
+import LoadError from "../components/LoadError";
 import MetricCard from "../components/MetricCard";
 import { 
   ShieldCheck, 
@@ -12,9 +13,9 @@ import {
   ShoppingBag, 
   RefreshCw, 
   CheckCircle, 
-  XCircle, 
-  AlertTriangle,
-  FileText
+  
+  
+
 } from "lucide-react";
 
 export default function AdminDashboard({ setCurrentView, setSelectedPlantationId }) {
@@ -23,23 +24,25 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
   const [verificationQueue, setVerificationQueue] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [selectedVerification, setSelectedVerification] = useState(null);
   const [reviewNote, setReviewNote] = useState("");
 
   const loadData = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const [met, queue, logs] = await Promise.all([
-        api.getAdminMetrics().catch(() => null),
-        api.getVerificationQueue().catch(() => []),
-        api.getAuditLogs().catch(() => [])
+        api.getAdminMetrics(),
+        api.getVerificationQueue(),
+        api.getAuditLogs()
       ]);
       setMetrics(met);
       setVerificationQueue(queue || []);
       setAuditLogs(logs || []);
     } catch (err) {
-      console.error("Admin data load error:", err);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -55,13 +58,14 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
     try {
       await api.reviewVerification(selectedVerification.id, {
         decision,
-        notes: reviewNote || `Auditor decision: ${decision}`
+        // Real notes only: the backend requires them when overriding the engine decision.
+        notes: reviewNote.trim()
       });
       setSelectedVerification(null);
       setReviewNote("");
       loadData();
     } catch (err) {
-      alert(`Action failed: ${err.message}`);
+      setLoadError(`Decision not saved: ${err.message}`);
     } finally {
       setActionLoading(false);
     }
@@ -69,6 +73,7 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6 text-xs">
+      <LoadError message={loadError} onRetry={loadData} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
         <div>
@@ -174,7 +179,7 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {verificationQueue.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50 transition">
+                  <tr key={item.id || `preview-${item.plantation_id}`} className="hover:bg-slate-50 transition">
                     <td className="py-3.5 px-4 font-mono font-semibold text-slate-900">
                       {item.id}
                     </td>
@@ -209,7 +214,9 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
                         </button>
                         <button
                           onClick={() => setSelectedVerification(item)}
-                          className="px-2.5 py-1 bg-forest-800 text-white rounded hover:bg-forest-900 font-semibold"
+                          disabled={!item.id}
+                          title={item.id ? "" : "No verification has been run yet"}
+                          className="px-2.5 py-1 bg-forest-800 text-white rounded hover:bg-forest-900 font-semibold disabled:opacity-40"
                         >
                           Review
                         </button>
@@ -253,9 +260,10 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
             <div className="grid grid-cols-3 gap-2 pt-2">
               <button
                 type="button"
-                disabled={actionLoading}
+                disabled={actionLoading || selectedVerification.overall_score == null}
+                title={selectedVerification.overall_score == null ? "Approval needs a fully scored verification" : ""}
                 onClick={() => handleReviewAction("APPROVED")}
-                className="py-2 bg-forest-800 hover:bg-forest-900 text-white font-bold rounded-lg text-xs"
+                className="py-2 bg-forest-800 hover:bg-forest-900 text-white font-bold rounded-lg text-xs disabled:opacity-40"
               >
                 Approve
               </button>

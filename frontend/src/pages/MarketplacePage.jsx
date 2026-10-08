@@ -2,22 +2,27 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api, { getImageUrl } from "../services/api";
 import StatusBadge from "../components/StatusBadge";
-import { Search, ArrowRight, RefreshCw, FileImage, ShieldCheck, CheckCircle, MapPin, Award } from "lucide-react";
+import LoadError from "../components/LoadError";
+import { Search, ArrowRight, RefreshCw, FileImage, MapPin, Award } from "lucide-react";
 
 export default function MarketplacePage({ setCurrentView, setSelectedCreditId }) {
   const { isAuthenticated, role } = useAuth();
   const [credits, setCredits] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("AVAILABLE");
 
   const loadCredits = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const data = await api.listMarketplaceCredits();
+      // AVAILABLE returns only credits that pass every backend listing rule (approved + verified).
+      const data = await api.listMarketplaceCredits({ status: statusFilter === "AVAILABLE" ? "AVAILABLE" : "ALL" });
       setCredits(data || []);
     } catch (err) {
-      console.error("Failed to load credits:", err);
+      setCredits([]);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -25,7 +30,8 @@ export default function MarketplacePage({ setCurrentView, setSelectedCreditId })
 
   useEffect(() => {
     loadCredits();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
 
   const handleAcquireOrView = (creditId) => {
     setSelectedCreditId(creditId);
@@ -38,12 +44,16 @@ export default function MarketplacePage({ setCurrentView, setSelectedCreditId })
       (credit.plantation_name && credit.plantation_name.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (credit.location && credit.location.toLowerCase().includes(searchQuery.toLowerCase()));
     
-    const sMatch = statusFilter === "ALL" || credit.status === statusFilter;
+    const sMatch =
+      statusFilter === "ALL" ||
+      (statusFilter === "AVAILABLE" && credit.is_listed) ||
+      (statusFilter === "SOLD" && (credit.status === "SOLD" || credit.status === "RETIRED"));
     return qMatch && sMatch;
   });
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6 text-xs text-slate-800">
+      <LoadError message={loadError} onRetry={loadCredits} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 border-b border-slate-200 pb-4">
         <div>
@@ -196,14 +206,14 @@ export default function MarketplacePage({ setCurrentView, setSelectedCreditId })
                         <div className="flex justify-between items-baseline">
                           <span className="text-slate-500">Verification:</span>
                           <span className="font-semibold text-emerald-800">
-                            {credit.verification_decision || "APPROVED"}
+                            {credit.verification_decision || "—"}
                           </span>
                         </div>
 
                         <div className="flex justify-between items-baseline">
                           <span className="text-slate-500">Verification Score:</span>
                           <span className="font-mono font-bold text-slate-900">
-                            {credit.verification_score ? `${credit.verification_score.toFixed(1)} / 100` : "78.6 / 100"}
+                            {credit.verification_score != null ? `${credit.verification_score.toFixed(1)} / 100` : "—"}
                           </span>
                         </div>
 

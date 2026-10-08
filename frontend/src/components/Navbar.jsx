@@ -4,7 +4,7 @@ import {
   Menu, 
   LogOut,
   User,
-  Shield
+
 } from "lucide-react";
 import { getRoleDashboardView } from "../utils/roleRouting";
 

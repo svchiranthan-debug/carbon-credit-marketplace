@@ -35,6 +35,11 @@ export default function StatusBadge({ status, size = "md" }) {
       icon: AlertTriangle,
       label: "UNDER REVIEW",
     },
+    PENDING: {
+      bg: "bg-slate-100 text-slate-700 border-slate-200",
+      icon: Clock,
+      label: "PENDING",
+    },
     SUBMITTED: {
       bg: "bg-slate-100 text-slate-700 border-slate-200",
       icon: Clock,

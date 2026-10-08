@@ -2,20 +2,23 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api, { getImageUrl } from "../services/api";
 import StatusBadge from "../components/StatusBadge";
-import { Trees, Plus, ArrowRight, RefreshCw, MapPin, Calendar, FileImage, ShieldCheck } from "lucide-react";
+import LoadError from "../components/LoadError";
+import { Trees, Plus, ArrowRight, RefreshCw, MapPin, Calendar, FileImage } from "lucide-react";
 
 export default function FarmerPlantationsPage({ setCurrentView, setSelectedPlantationId }) {
   const { user } = useAuth();
   const [plantations, setPlantations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   const fetchPlantations = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.listPlantations();
       setPlantations(data || []);
     } catch (err) {
-      console.error("Failed to load farmer plantations:", err);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -32,6 +35,7 @@ export default function FarmerPlantationsPage({ setCurrentView, setSelectedPlant
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-6 text-xs text-slate-800">
+      <LoadError message={loadError} onRetry={fetchPlantations} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-3 border-b border-slate-200 pb-4">
         <div>

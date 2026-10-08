@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import L from "leaflet";
-import { Search, RotateCcw, Crosshair, MapPin, Info, Undo2, Check, Navigation, AlertCircle } from "lucide-react";
+import { Search, RotateCcw, Crosshair, MapPin, Info, Undo2, Check, AlertCircle } from "lucide-react";
 
 // Geodesic Polygon Area Calculation in Hectares and Square Meters
 export function calculatePolygonArea(coords) {
