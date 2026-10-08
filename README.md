@@ -79,7 +79,7 @@ These checks add up to a 0–100 risk score: reused photo (perceptual hash), non
 ## Tests
 
 ```bash
-cd backend && pytest                       # 79 tests; real-chain tests run if Ganache is on :8545
+cd backend && pytest                       # 78 tests; real-chain tests run if Ganache is on :8545
 cd frontend && npm run build && npm run lint
 cd mobile && npx tsc --noEmit && npx expo export --platform android
 ```
