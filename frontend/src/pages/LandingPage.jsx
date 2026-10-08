@@ -12,7 +12,9 @@ export default function LandingPage({ setCurrentView, setPortalRole }) {
     }
     
     // If the user is already authenticated with this exact role, route to their dashboard directly
-    if (isAuthenticated && role && role.toUpperCase() === targetRole) {
+    const current = (role || "").toUpperCase();
+    // ADMIN uses the auditor portal
+    if (isAuthenticated && (current === targetRole || (current === "ADMIN" && targetRole === "AUDITOR"))) {
       setCurrentView(getRoleDashboardView(role));
     } else {
       // Otherwise route to the portal's login page

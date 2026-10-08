@@ -64,7 +64,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - Interactive docs (Swagger): `http://localhost:8000/docs`
 - Health: `http://localhost:8000/api/health`, chain status: `http://localhost:8000/api/blockchain/status`
 
-Demo accounts (password `Demo@123`): `farmer@agrocarbon.demo`, `farmer2@agrocarbon.demo`, `buyer@ecocorp.demo`, `buyer2@greeninvest.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo`. Public registration allows FARMER, BUYER and AUDITOR only.
+Demo accounts (password `Demo@123`): `farmer@agrocarbon.demo`, `farmer2@agrocarbon.demo`, `buyer@ecocorp.demo`, `buyer2@greeninvest.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo`. Public registration allows FARMER and BUYER only. AUDITOR accounts are created by an ADMIN (`POST /api/users`, or the admin dashboard form). ADMIN accounts come from `seed_data.py`.
 
 ## Tests
 
@@ -103,8 +103,8 @@ tests/                    pytest suite
 
 `Score = 0.40 × NDVI + 0.35 × CV + 0.25 × SOC` → **APPROVED** ≥ 75, **REVIEW** ≥ 55, **REJECTED** < 55.
 
-1. Boundary (centroid + area), a decodable ground photo and an SOC value are required. If any is missing → **PENDING**, all scores null.
-2. NDVI comes from Sentinel-2 pixels read by the backend (`SENTINEL2_COMPUTED`) or from a reported value with source and date (`REPORTED`). If neither is available → **PENDING**. Nothing is simulated.
+1. Boundary (drawn polygon, or centre + area), a decodable ground photo and an SOC value are required. If any is missing → **PENDING**, all scores null.
+2. NDVI comes from Sentinel-2 pixels read by the backend (`SENTINEL2_COMPUTED`) or from a reported value with source and date (`REPORTED`). If neither is available → **PENDING**. Nothing is simulated. Only pixels inside the drawn polygon count, and pixels the scene classification layer marks as cloud, shadow, cirrus, snow or no-data are dropped. A scene is used only if at least 50% of the plot is clear.
 3. If the photo model cannot run (missing weights, corrupt image) → **PENDING**.
 4. HIGH fraud risk or REPORTED NDVI turn an APPROVED result into **REVIEW**, so an auditor must confirm it.
 5. Every verification stores `decision_reasons`, `evidence_snapshot` (inputs + photo SHA-256), `ndvi_provenance`, `engine_decision`, `decided_by` and `auditor_notes`.

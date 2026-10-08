@@ -65,12 +65,12 @@ Register → plantation (PENDING) → photo + SOC + reported NDVI → verify (RE
 | Issue | File | Recommended next step |
 |---|---|---|
 | Live Sentinel-2 path not exercised against the real service: this environment cannot reach Planetary Computer (the band-window code is tested on a local GeoTIFF) | `services/ai/satellite_client.py` | Run one verification on a networked laptop and check `ndvi_provenance = SENTINEL2_COMPUTED` |
-| NDVI footprint is a square of the plot's area around the centroid; the polygon drawn in the web app is not stored; no per-pixel cloud mask (SCL) | backend models, `CreatePlantationPage.jsx` | Store the GeoJSON polygon; mask with the SCL band |
-| Anyone can self-register as AUDITOR and approve REVIEW cases | `schemas.py` (`SELF_REGISTER_ROLES`) | Make AUDITOR admin-assigned before any real use |
+| ~~NDVI over a square approximation; no cloud mask~~ **Fixed (follow-up PR):** the drawn polygon is stored and used; SCL cloud/shadow/cirrus/snow pixels are excluded; ≥ 50% of the plot must be clear. Plots registered from the mobile app (GPS point + area) still use the square | `satellite_client.py` | Add polygon drawing to the mobile app |
+| ~~Anyone can self-register as AUDITOR~~ **Fixed (follow-up PR):** only an ADMIN can create auditors (`POST /api/users`, admin dashboard form). Auditor accounts that were self-registered in an old database still exist | `routers/users.py` | Review old auditor accounts with `GET /api/users` |
 | Existing `carbon_marketplace.db` (from the zip, now untracked): 149 scored verifications with no NDVI provenance (74 labelled "REAL SATELLITE DATA" by the old synthetic-grid path) and 28 AVAILABLE credits, now hidden from the marketplace | local DB | Run `python scripts/audit_legacy_data.py`; start fresh with `seed_data.py --reset` if the old data is not needed |
 | The old default `SECRET_KEY` is visible in git history (first commit) | `app/config.py` | Set a new `SECRET_KEY` in `.env` (the new default is different) |
 | Custodial demo wallets; backend signs all chain transactions | `blockchain_service.py` | Fine for a prototype; real wallets would need per-user keys |
 | `GET /api/blockchain/status` deploys the contract if none is deployed | `blockchain_service.py` | Acceptable for local Ganache |
 | Frontend: 32 lint warnings (13 unused variables, 13 React hook patterns, 6 fast-refresh exports) and a >500 kB bundle warning | `frontend/src` | Code-split the map page; clean up the warnings |
-| Desktop sidebar overlaps the header title (pre-existing layout) | `frontend/src/components/Sidebar.jsx` | Offset the sidebar below the header |
+| ~~Desktop sidebar overlaps the header title~~ **Fixed (follow-up PR)** | `frontend/src/App.jsx` | — |
 | Mobile app not run on a physical device in this audit | `mobile/` | Test with Expo Go on the same Wi-Fi as the backend |

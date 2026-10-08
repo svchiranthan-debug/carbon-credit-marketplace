@@ -204,16 +204,19 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-[#FAF9F6] text-slate-900 flex flex-col font-sans selection:bg-forest-100 selection:text-forest-900">
-      {/* Top Academic Prototype Disclaimer */}
-      <DisclaimerBanner />
+      {/* Header (offset on desktop so the fixed sidebar does not cover it) */}
+      <div className={showSidebar ? "lg:pl-56" : ""}>
+        {/* Top Academic Prototype Disclaimer */}
+        <DisclaimerBanner />
 
-      {/* Main Top Header Navbar */}
-      <Navbar 
-        currentView={currentView} 
-        setCurrentView={setCurrentView} 
-        toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-        setPortalRole={setPortalRole}
-      />
+        {/* Main Top Header Navbar */}
+        <Navbar
+          currentView={currentView}
+          setCurrentView={setCurrentView}
+          toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          setPortalRole={setPortalRole}
+        />
+      </div>
 
       {/* Optional Authenticated Sidebar */}
       {showSidebar && (
