@@ -5,10 +5,11 @@ Model contract (must match ml/train.py):
   input   : one RGB image, resized to 224x224, ImageNet mean/std normalisation
   output  : softmax over {non_plantation, plantation, unclear_evidence}
 
-IMPORTANT LIMITATION: the shipped weights were trained and validated only on the
-procedurally generated synthetic images produced by ml/prepare_dataset.py. The
-validation accuracy recorded in model_metadata.json is therefore accuracy on synthetic
-data, NOT on real field photographs. No real-world validation has been performed.
+Weights (v2): trained on real photographs (Intel Image Classification; see
+ml/build_real_dataset.py) and evaluated on a held-out real test set (accuracy 0.984, see
+ml/reports/evaluation_v2.md). LIMITATION: that dataset has no areca/coconut/agroforestry
+plantation photos ("plantation" was learned from forest photos), so accuracy on real
+plantation field photos has not been measured.
 
 Failure policy: if the model is missing, the image is invalid, or inference fails, this
 service returns ``available=False`` with a reason and null scores. It never substitutes a
@@ -92,7 +93,7 @@ class AIVisionService:
             "model_version": meta.get("model_version", "unknown"),
             "training_data": meta.get(
                 "training_data",
-                "Procedurally generated synthetic images (ml/prepare_dataset.py); no real-world validation.",
+                "See ml/weights/model_metadata.json",
             ),
         }
 

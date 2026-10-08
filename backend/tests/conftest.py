@@ -72,20 +72,72 @@ def client():
 
 
 # ---------------------------------------------------------------- helpers
+# sha256 of each synthetic fixture image -> the class it stands for (see fixture_classifier below)
+SYNTHETIC_FIXTURES = {}
+
+
 def synthetic_image_bytes(kind: str = "plantation", seed: int = 7, fmt: str = "JPEG") -> bytes:
-    """SYNTHETIC test image from ml/prepare_dataset.py (not a real photograph)."""
+    """SYNTHETIC test image from ml/prepare_dataset.py (not a real photograph).
+
+    The real classifier is trained on real photos and does not reliably recognise these
+    cartoon-like images, so flow tests use ``fixture_classifier`` to label them.
+    """
+    import hashlib
     from ml.prepare_dataset import generate_non_plantation_image, generate_plantation_image
     gen = generate_plantation_image if kind == "plantation" else generate_non_plantation_image
     buf = io.BytesIO()
     gen(seed, (320, 320)).save(buf, format=fmt)
-    return buf.getvalue()
+    data = buf.getvalue()
+    SYNTHETIC_FIXTURES[hashlib.sha256(data).hexdigest()] = kind
+    return data
+
+
+@pytest.fixture(autouse=True)
+def fixture_classifier(request, monkeypatch):
+    """Labels known synthetic fixture images deterministically (95% confidence for their kind).
+
+    Flow tests (submission, verification rules, marketplace, e2e) test the pipeline, not the
+    model. Image validation still runs for real. Any other image goes to the real model.
+    Tests marked ``@pytest.mark.real_model`` always use the real model.
+    """
+    if request.node.get_closest_marker("real_model"):
+        return
+    import hashlib
+    from app.services.ai import ai_vision_service as avs
+
+    real_verify = avs.AIVisionService.verify_image.__func__
+
+    def verify(cls, image_path):
+        ok, reason, info = avs.validate_image_file(image_path)
+        if ok:
+            with open(image_path, "rb") as f:
+                kind = SYNTHETIC_FIXTURES.get(hashlib.sha256(f.read()).hexdigest())
+            if kind:
+                probs = {c: 2.5 for c in avs.EXPECTED_CLASSES}
+                probs[kind] = 95.0
+                score, status, notes = avs.AIVisionService.score_from_prediction(kind, 95.0)
+                return {"available": True, "reason": None, "predicted_class": kind,
+                        "prediction_label": avs.AIVisionService.CLASS_DISPLAY_NAMES[kind],
+                        "confidence_pct": 95.0, "class_probabilities": probs, "cv_score": score,
+                        "cv_status": status, "feature_evidence": notes + " [TEST FIXTURE LABEL]",
+                        "image_info": info, **avs.AIVisionService.model_info()}
+        return real_verify(cls, image_path)
+
+    monkeypatch.setattr(avs.AIVisionService, "verify_image", classmethod(verify))
 
 
 def register(client, role: str, name: str = "Test User"):
+    """Self-registers FARMER/BUYER; AUDITOR accounts are created by the seeded admin, then logged in."""
     email = f"{role.lower()}_{uuid.uuid4().hex[:10]}@test.example"
-    r = client.post("/api/auth/register", json={
-        "email": email, "password": "TestPass@123", "full_name": name, "role": role,
-    })
+    body = {"email": email, "password": "TestPass@123", "full_name": name, "role": role}
+    if role == "AUDITOR":
+        admin = login(client, "admin@agrocarbon.demo")
+        r = client.post("/api/users", headers=admin, json=body)
+        assert r.status_code == 201, r.text
+        r = client.post("/api/auth/login", json={"email": email, "password": "TestPass@123"})
+        assert r.status_code == 200, r.text
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}, r.json()["user"]
+    r = client.post("/api/auth/register", json=body)
     assert r.status_code == 201, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}, r.json()["user"]
 

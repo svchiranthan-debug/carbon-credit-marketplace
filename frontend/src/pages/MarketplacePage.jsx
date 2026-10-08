@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { useAuth } from "../context/AuthContext";
 import api, { getImageUrl } from "../services/api";
 import StatusBadge from "../components/StatusBadge";
 import LoadError from "../components/LoadError";
 import { Search, ArrowRight, RefreshCw, FileImage, MapPin, Award } from "lucide-react";
 
 export default function MarketplacePage({ setCurrentView, setSelectedCreditId }) {
-  const { isAuthenticated, role } = useAuth();
   const [credits, setCredits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);

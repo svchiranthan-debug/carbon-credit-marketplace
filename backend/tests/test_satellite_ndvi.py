@@ -72,9 +72,37 @@ class _Resp:
         return self._p
 
 
-SCENE = {"id": "S2B_TEST", "properties": {"eo:cloud_cover": 3.0, "datetime": "2026-09-01T05:00:00Z",
-                                          "platform": "Sentinel-2B", "s2:processing_baseline": "05.11"},
-         "assets": {"B04": {"href": "https://example/B04.tif"}, "B08": {"href": "https://example/B08.tif"}}}
+def _scene(hrefs):
+    return {"id": "S2B_TEST", "properties": {"eo:cloud_cover": 3.0, "datetime": "2026-09-01T05:00:00Z",
+                                             "platform": "Sentinel-2B", "s2:processing_baseline": "05.11"},
+            "assets": {k: {"href": v} for k, v in hrefs.items()}}
+
+
+SCENE = _scene({"B04": "https://example/B04.tif", "B08": "https://example/B08.tif", "SCL": "https://example/SCL.tif"})
+LAT, LON = 12.75, 75.2
+
+
+def _write_tiles(tmp_path, red, nir, scl):
+    """Writes synthetic B04/B08 (10 m) and SCL (20 m) GeoTIFFs centred on LAT/LON, UTM 43N."""
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import from_origin
+    from rasterio.warp import transform as warp_transform
+
+    xs, ys = warp_transform("EPSG:4326", "EPSG:32643", [LON], [LAT])
+    ox, oy = xs[0] - 500, ys[0] + 500
+    paths = {}
+    for name, arr, res in (("B04", red, 10), ("B08", nir, 10), ("SCL", scl, 20)):
+        path = tmp_path / f"{name}.tif"
+        with rasterio.open(path, "w", driver="GTiff", width=arr.shape[1], height=arr.shape[0], count=1,
+                           dtype=str(arr.dtype), crs="EPSG:32643", transform=from_origin(ox, oy, res, res)) as dst:
+            dst.write(arr, 1)
+        paths[name] = str(path)
+    return paths
+
+
+def _patch_scene(monkeypatch, hrefs):
+    monkeypatch.setattr(sc.requests, "post", lambda *a, **k: _Resp(200, {"features": [_scene(hrefs)]}))
+    monkeypatch.setattr(sc.SatelliteClient, "_sign_href", classmethod(lambda cls, h: h))
 
 
 def test_scene_found_but_bands_unreadable_is_unavailable_not_synthetic(enabled, monkeypatch):
@@ -82,27 +110,84 @@ def test_scene_found_but_bands_unreadable_is_unavailable_not_synthetic(enabled, 
     monkeypatch.setattr(sc.requests, "post", lambda *a, **k: _Resp(200, {"features": [SCENE]}))
     monkeypatch.setattr(sc.SatelliteClient, "_sign_href", classmethod(lambda cls, h: h + "?sig"))
 
-    def fail(cls, href, bbox):
+    def fail(cls, href, footprint, out_shape=None):
         raise OSError("HTTP range request failed")
-    monkeypatch.setattr(sc.SatelliteClient, "_read_band_window", classmethod(fail))
+    monkeypatch.setattr(sc.SatelliteClient, "_read_window", classmethod(fail))
     res = sc.SatelliteClient.query_satellite_ndvi(12.5, 76.9, 1.0)
     assert res["available"] is False
-    assert "could not be read" in res["reason"]
+    assert "Band read failed" in res["reason"]
     nd = NDVIService.analyze_ndvi(latitude=12.5, longitude=76.9, area_hectares=1.0)
     assert nd["ndvi_score"] is None and nd["provenance"] is None and nd["is_real_satellite"] is False
 
 
-def test_real_band_pixels_produce_computed_provenance(enabled, monkeypatch):
-    monkeypatch.setattr(sc.requests, "post", lambda *a, **k: _Resp(200, {"features": [SCENE]}))
-    monkeypatch.setattr(sc.SatelliteClient, "_sign_href", classmethod(lambda cls, h: h + "?sig"))
-    bands = {"B04": np.full((6, 6), 1500, dtype=np.uint16), "B08": np.full((6, 6), 5000, dtype=np.uint16)}
-    monkeypatch.setattr(sc.SatelliteClient, "_read_band_window",
-                        classmethod(lambda cls, href, bbox: bands["B04" if "B04" in href else "B08"]))
-    nd = NDVIService.analyze_ndvi(latitude=12.5, longitude=76.9, area_hectares=1.0)
-    # reflectance: red (1500-1000)/1e4=0.05, nir (5000-1000)/1e4=0.40 → NDVI 0.35/0.45
+def test_scene_without_cloud_layer_is_not_used(enabled, monkeypatch):
+    no_scl = _scene({"B04": "https://example/B04.tif", "B08": "https://example/B08.tif"})
+    monkeypatch.setattr(sc.requests, "post", lambda *a, **k: _Resp(200, {"features": [no_scl]}))
+    res = sc.SatelliteClient.query_satellite_ndvi(12.5, 76.9, 1.0)
+    assert res["available"] is False and "SCL" in res["reason"]
+
+
+def test_real_band_pixels_produce_computed_provenance(enabled, monkeypatch, tmp_path):
+    red = np.full((100, 100), 1500, dtype=np.uint16)   # reflectance 0.05
+    nir = np.full((100, 100), 5000, dtype=np.uint16)   # reflectance 0.40
+    scl = np.full((50, 50), 4, dtype=np.uint8)          # vegetation, no clouds
+    _patch_scene(monkeypatch, _write_tiles(tmp_path, red, nir, scl))
+    nd = NDVIService.analyze_ndvi(latitude=LAT, longitude=LON, area_hectares=1.0)
     assert nd["provenance"] == "SENTINEL2_COMPUTED" and nd["is_real_satellite"] is True
-    assert nd["mean_ndvi"] == pytest.approx(0.778, abs=1e-3)
+    assert nd["mean_ndvi"] == pytest.approx(0.778, abs=1e-3)   # 0.35 / 0.45
+    assert nd["clear_pixel_pct"] == 100.0 and nd["footprint_type"] == "SQUARE_APPROX"
     assert nd["acquisition_date"] == "2026-09-01" and "S2B_TEST" in nd["satellite_source"]
+
+
+def test_cloudy_pixels_are_excluded(enabled, monkeypatch, tmp_path):
+    """Left part of the plot is cloud (SCL 9) with a very different NDVI; it must not count."""
+    red = np.full((100, 100), 1500, dtype=np.uint16)
+    nir = np.full((100, 100), 5000, dtype=np.uint16)
+    red[:, :50] = 4000   # 'cloud' pixels: bright red → low NDVI if they were used
+    nir[:, :50] = 4200
+    scl = np.full((50, 50), 4, dtype=np.uint8)
+    scl[:, :25] = 9      # cloud high probability over the same area (20 m grid)
+    # Plot of 1 ha centred on the boundary between cloudy and clear halves → ~half cloudy
+    _patch_scene(monkeypatch, _write_tiles(tmp_path, red, nir, scl))
+    res = sc.SatelliteClient.query_satellite_ndvi(LAT, LON + 0.0001, 0.25)  # straddles the edge, mostly clear
+    assert res["available"], res.get("reason")
+    assert res["mean_ndvi"] == pytest.approx(0.778, abs=1e-3)  # only clear pixels used
+    assert 50.0 <= res["clear_pixel_pct"] < 100.0
+
+
+def test_mostly_cloudy_plot_is_unavailable(enabled, monkeypatch, tmp_path):
+    red = np.full((100, 100), 1500, dtype=np.uint16)
+    nir = np.full((100, 100), 5000, dtype=np.uint16)
+    scl = np.full((50, 50), 8, dtype=np.uint8)  # cloud medium probability everywhere
+    _patch_scene(monkeypatch, _write_tiles(tmp_path, red, nir, scl))
+    res = sc.SatelliteClient.query_satellite_ndvi(LAT, LON, 1.0)
+    assert res["available"] is False and "cloud-free" in res["reason"]
+
+
+def test_boundary_polygon_limits_pixels(enabled, monkeypatch, tmp_path):
+    """Only pixels inside the drawn polygon count, not the whole bounding box."""
+    from rasterio.warp import transform as warp_transform
+    red = np.full((100, 100), 1500, dtype=np.uint16)
+    nir = np.full((100, 100), 5000, dtype=np.uint16)
+    scl = np.full((50, 50), 4, dtype=np.uint8)
+    paths = _write_tiles(tmp_path, red, nir, scl)
+    # Give the pixels below the plot's centre a much lower NDVI
+    import rasterio
+    with rasterio.open(paths["B04"], "r+") as ds:
+        arr = ds.read(1)
+        arr[50:, :] = 4000
+        ds.write(arr, 1)
+    _patch_scene(monkeypatch, paths)
+    # Thin triangle entirely in the northern (high-NDVI) half, ~60 m wide
+    d = 0.0006
+    tri = [[LON - d, LAT + 0.0001], [LON + d, LAT + 0.0001], [LON, LAT + d], [LON - d, LAT + 0.0001]]
+    res = sc.SatelliteClient.query_satellite_ndvi(LAT, LON, 0.4, boundary_lonlat=tri)
+    assert res["available"], res.get("reason")
+    assert res["footprint_type"] == "POLYGON"
+    assert res["mean_ndvi"] == pytest.approx(0.778, abs=1e-3)
+    # Same bounding box without the polygon includes southern pixels → lower mean
+    square = sc.SatelliteClient.query_satellite_ndvi(LAT, LON, 1.0)
+    assert square["mean_ndvi"] < res["mean_ndvi"]
 
 
 def test_reported_ndvi_requires_source_and_date():

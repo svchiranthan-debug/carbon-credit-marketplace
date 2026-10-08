@@ -30,7 +30,7 @@ def test_boundary_only_stays_pending_with_null_values(client, farmer):
         assert v[key] is None, key
     assert v["is_real_satellite"] is False
     assert set(v["missing_evidence"]) == {"Ground imagery", "Soil carbon data"}
-    assert v["evidence_status"] == {"boundary": "PROVIDED", "ground_imagery": "NOT PROVIDED",
+    assert v["evidence_status"] == {"boundary": "PROVIDED", "boundary_type": "CENTRE_AND_AREA", "ground_imagery": "NOT PROVIDED",
                                     "soil_carbon": "NOT PROVIDED", "satellite_ndvi": "PENDING"}
     assert any("Missing required evidence: Ground imagery" in r for r in v["decision_reasons"])
     assert client.get(f"/api/plantations/{p['id']}", headers=farmer).json()["status"] == "SUBMITTED"

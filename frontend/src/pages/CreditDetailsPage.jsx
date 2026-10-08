@@ -13,7 +13,7 @@ import {
   FileImage
 } from "lucide-react";
 
-export default function CreditDetailsPage({ creditId, setCurrentView, setSelectedPlantationId }) {
+export default function CreditDetailsPage({ creditId, setCurrentView }) {
   const { isAuthenticated, role } = useAuth();
   const [credit, setCredit] = useState(null);
   const [blockchainRecord, setBlockchainRecord] = useState(null);
@@ -48,6 +48,8 @@ export default function CreditDetailsPage({ creditId, setCurrentView, setSelecte
       setTransactionSuccess(null);
       loadDetails();
     }
+    // loadDetails only depends on creditId, which is already listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [creditId]);
 
   const handlePurchase = async () => {

@@ -1,13 +1,14 @@
-import os
 import logging
+import os
+import secrets
 from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Development-only signing key. Override with the SECRET_KEY environment variable
-# (or backend/.env) for any shared or deployed environment.
+# Placeholder only. If SECRET_KEY is not configured, a random key is generated on first start
+# and saved to backend/.env (see _ensure_secret_key below).
 _DEV_SECRET_KEY = "dev-only-insecure-secret-key-change-me"
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class Settings(BaseSettings):
     SATELLITE_REQUEST_TIMEOUT_S: float = 10.0
 
     # --- Machine learning (ground photo classifier) ---
-    ML_MODEL_PATH: str = os.path.join(BACKEND_DIR, "ml", "weights", "plantation_classifier_v1.pt")
+    ML_MODEL_PATH: str = os.path.join(BACKEND_DIR, "ml", "weights", "plantation_classifier_v2.pt")
     ML_METADATA_PATH: str = os.path.join(BACKEND_DIR, "ml", "weights", "model_metadata.json")
 
     # --- Blockchain (local Ganache) ---
@@ -76,16 +77,36 @@ class Settings(BaseSettings):
             return ["*"]
         return [o.strip() for o in raw.split(",") if o.strip()]
 
-    @property
-    def using_dev_secret(self) -> bool:
-        return self.SECRET_KEY == _DEV_SECRET_KEY
+
+
+_PLACEHOLDER_SECRETS = {_DEV_SECRET_KEY, "change-me", "changeme", ""}
+
+
+def _ensure_secret_key(cfg: "Settings") -> None:
+    """Replace a missing/placeholder SECRET_KEY with a random one stored in backend/.env.
+
+    Runs once per install: the generated key is written to backend/.env (git-ignored), so
+    tokens stay valid across restarts and every developer machine gets its own key.
+    """
+    if cfg.SECRET_KEY not in _PLACEHOLDER_SECRETS:
+        return
+    env_path = os.path.join(BACKEND_DIR, ".env")
+    new_key = secrets.token_hex(32)
+    try:
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f.read().splitlines() if not ln.strip().startswith("SECRET_KEY=")]
+        lines.append(f"SECRET_KEY={new_key}")
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        cfg.SECRET_KEY = new_key
+        logger.warning("Generated a new SECRET_KEY and saved it to %s", env_path)
+    except OSError as exc:
+        cfg.SECRET_KEY = new_key  # still never run with a known key; tokens reset on restart
+        logger.warning("Could not write %s (%s); using a random SECRET_KEY for this run only.", env_path, exc)
 
 
 settings = Settings()
+_ensure_secret_key(settings)
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-
-if settings.using_dev_secret:
-    logger.warning(
-        "SECRET_KEY is using the built-in development value. "
-        "Set SECRET_KEY in backend/.env before sharing or deploying this backend."
-    )

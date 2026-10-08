@@ -44,13 +44,14 @@ class NDVIService:
         latitude: float,
         longitude: float,
         area_hectares: Optional[float] = None,
+        boundary_lonlat=None,
         reported_value: Optional[float] = None,
         reported_source: Optional[str] = None,
         reported_date: Optional[str] = None,
         **_ignored: Any,
     ) -> Dict[str, Any]:
         sat = SatelliteClient.query_satellite_ndvi(
-            latitude=latitude, longitude=longitude, area_hectares=area_hectares
+            latitude=latitude, longitude=longitude, area_hectares=area_hectares, boundary_lonlat=boundary_lonlat
         )
 
         if sat.get("available"):
@@ -70,6 +71,8 @@ class NDVIService:
                 "satellite_source": sat["source_label"],
                 "acquisition_date": sat.get("acquisition_date"),
                 "cloud_cover_pct": sat.get("cloud_cover_pct"),
+                "clear_pixel_pct": sat.get("clear_pixel_pct"),
+                "footprint_type": sat.get("footprint_type"),
                 "formula": NDVI_FORMULA,
                 "satellite_note": None,
             }

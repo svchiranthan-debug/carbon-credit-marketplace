@@ -4,7 +4,7 @@ import { Trees, ShoppingBag, ShieldCheck, ArrowRight } from "lucide-react";
 import { getRoleDashboardView } from "../utils/roleRouting";
 
 export default function LandingPage({ setCurrentView, setPortalRole }) {
-  const { user, isAuthenticated, role } = useAuth();
+  const { isAuthenticated, role } = useAuth();
 
   const handlePortalClick = (targetRole) => {
     if (setPortalRole) {

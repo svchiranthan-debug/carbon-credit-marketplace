@@ -91,3 +91,42 @@ def test_verification_run_endpoint_rejects_foreign_paths(client, farmer):
     assert r.status_code == 422
     r = client.post("/api/verification/run", headers=farmer[0], json={"plantation_id": p["id"], "soc_sample_pct": 1.75})
     assert r.status_code == 200 and r.json()["decision"] == "PENDING" and r.json()["soc_pct"] == 1.75
+
+
+def _square(lat, lng, side_m=63.6):
+    import math
+    dlat = side_m / 111_320
+    dlng = side_m / (111_320 * math.cos(math.radians(lat)))
+    return [[lat, lng], [lat, lng + dlng], [lat + dlat, lng + dlng], [lat + dlat, lng]], (lat + dlat / 2, lng + dlng / 2)
+
+
+def test_boundary_polygon_stored_and_validated(client, farmer):
+    pts, (clat, clng) = _square(13.30, 75.40)
+    ok = client.post("/api/plantations", headers=farmer[0], json=plantation_payload(
+        latitude=clat, longitude=clng, area_hectares=0.4047, boundary=pts))
+    assert ok.status_code == 201, ok.text
+    body = ok.json()
+    assert body["boundary"] == [[round(a, 10), round(b, 10)] for a, b in pts] or len(body["boundary"]) == 4
+    v = client.get(f"/api/plantations/{body['id']}/verification", headers=farmer[0]).json()
+    assert v["evidence_status"]["boundary_type"] == "POLYGON"
+
+    pts2, (clat2, clng2) = _square(13.31, 75.41)
+    # Declared area far from the drawn polygon's area
+    bad_area = client.post("/api/plantations", headers=farmer[0], json=plantation_payload(
+        latitude=clat2, longitude=clng2, area_hectares=2.0, boundary=pts2))
+    assert bad_area.status_code == 422 and "does not match" in bad_area.text
+    # Centre point outside the polygon
+    outside = client.post("/api/plantations", headers=farmer[0], json=plantation_payload(
+        latitude=clat2 + 0.01, longitude=clng2, area_hectares=0.4047, boundary=pts2))
+    assert outside.status_code == 422
+    # Too few / malformed points
+    for bad in ([[13.3, 75.4], [13.31, 75.4]], [[13.3, 75.4, 1], [13.31, 75.4], [13.3, 75.41]], [[95, 75.4], [13.31, 75.4], [13.3, 75.41]]):
+        r = client.post("/api/plantations", headers=farmer[0], json=plantation_payload(boundary=bad))
+        assert r.status_code == 422, bad
+
+
+def test_plantation_without_boundary_uses_centre_and_area(client, farmer):
+    p = client.post("/api/plantations", headers=farmer[0], json=plantation_payload()).json()
+    assert p["boundary"] is None
+    v = client.get(f"/api/plantations/{p['id']}/verification", headers=farmer[0]).json()
+    assert v["evidence_status"]["boundary_type"] == "CENTRE_AND_AREA"

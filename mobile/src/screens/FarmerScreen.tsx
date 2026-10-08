@@ -44,6 +44,7 @@ export default function FarmerScreen() {
   const [ageYears, setAgeYears] = useState("");
   const [soilSoc, setSoilSoc] = useState("");
   const [latitude, setLatitude] = useState("");
+  const [boundary, setBoundary] = useState<number[][] | null>(null);
   const [longitude, setLongitude] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -95,6 +96,7 @@ export default function FarmerScreen() {
       const lon = loc.coords.longitude.toFixed(4);
       setLatitude(lat);
       setLongitude(lon);
+      setBoundary(null); // a new GPS point replaces any drawn boundary
       setLocationLabel(`GPS Verified (${lat}, ${lon})`);
       Alert.alert("GPS Acquired", `Coordinates: ${lat}, ${lon}`);
     } catch (err: any) {
@@ -266,6 +268,7 @@ export default function FarmerScreen() {
         tree_count: parsedTrees,
         tree_species: species.trim(),
         soil_soc_pct: parsedSoc ?? null,
+        boundary: boundary ?? null,
         plantation_type: "Agroforestry"
       });
 
@@ -283,6 +286,7 @@ export default function FarmerScreen() {
             `Plantation #${newPlot.id} was created, but photo upload failed (${imgErr.message}). Verification was not executed. Please use 'RE-CAPTURE PHOTO' or 'UPLOAD EXISTING PHOTO' below to retry.`
           );
           setName("");
+          setBoundary(null);
           setImageUri(null);
           await fetchPlantations();
           setSelectedPlantation(newPlot);
@@ -313,6 +317,7 @@ export default function FarmerScreen() {
       }
 
       setName("");
+      setBoundary(null);
       setImageUri(null);
       await fetchPlantations();
       setSelectedPlantation(newPlot);
@@ -341,9 +346,11 @@ export default function FarmerScreen() {
         initialLat={parseFloat(latitude) || undefined}
         initialLon={parseFloat(longitude) || undefined}
         onClose={() => setMapVisible(false)}
-        onLocationSelected={(lat, lon, locName) => {
-          setLatitude(lat.toFixed(4));
-          setLongitude(lon.toFixed(4));
+        onLocationSelected={(lat, lon, locName, drawn, drawnAreaHa) => {
+          setLatitude(lat.toFixed(6));
+          setLongitude(lon.toFixed(6));
+          setBoundary(drawn && drawn.length >= 3 ? drawn : null);
+          if (drawn && drawn.length >= 3 && drawnAreaHa) setAreaHectares(drawnAreaHa.toFixed(4));
           if (locName) setLocationLabel(locName);
         }}
       />

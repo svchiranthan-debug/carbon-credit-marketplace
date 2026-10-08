@@ -220,6 +220,7 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
           <Row label="Farmer" value={plantation.farmer_name} />
           <Row label="Area" value={`${num(plantation.area_hectares, 4)} ha (${num(plantation.area_hectares * ACRES_PER_HA, 2)} ac)`} mono />
           <Row label="Location" value={`${num(plantation.latitude, 5)}, ${num(plantation.longitude, 5)}`} mono />
+          <Row label="Boundary" value={plantation.boundary ? `Drawn polygon (${plantation.boundary.length} points)` : "Centre point + area"} />
           <Row label="Trees" value={plantation.tree_count} mono />
           <Row label="Species" value={plantation.tree_species} />
           <Row label="Age" value={`${num(plantation.plantation_age_years)} yr`} mono />
@@ -258,6 +259,11 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
           <Row label="Min / Max" value={`${num(v.min_ndvi, 2)} / ${num(v.max_ndvi, 2)}`} mono />
           <Row label="Canopy ≥0.40" value={v.vegetation_coverage_pct == null ? DASH : `${num(v.vegetation_coverage_pct)}%`} mono />
           <Row label="Source" value={NDVI_SOURCE_LABEL[v.ndvi_provenance] || "Unavailable"} />
+          <Row
+            label="Cloud-free"
+            value={v.evidence_snapshot?.ndvi_measurement?.clear_pixel_pct != null ? `${v.evidence_snapshot.ndvi_measurement.clear_pixel_pct}% of plot` : DASH}
+            mono
+          />
           <Row label="Acquired" value={v.acquisition_date} mono />
         </ModalityCard>
         <ModalityCard title="Ground photo (CV)" weight="0.35" score={v.cv_score} contribution={v.cv_contribution} status={v.cv_detection_status}>

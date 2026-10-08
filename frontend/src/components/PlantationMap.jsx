@@ -3,7 +3,7 @@ import L from "leaflet";
 import { Search, RotateCcw, Crosshair, MapPin, Info, Undo2, Check, AlertCircle } from "lucide-react";
 
 // Geodesic Polygon Area Calculation in Hectares and Square Meters
-export function calculatePolygonArea(coords) {
+function calculatePolygonArea(coords) {
   if (!coords || coords.length < 3) return { hectares: 0, squareMeters: 0 };
   const R = 6378137; // Earth's radius in meters
   let total = 0;
@@ -30,7 +30,7 @@ export function calculatePolygonArea(coords) {
 }
 
 // Centroid calculation
-export function calculateCentroid(coords) {
+function calculateCentroid(coords) {
   if (!coords || coords.length === 0) return [12.9716, 77.5946];
   const sumLat = coords.reduce((sum, c) => sum + c[0], 0);
   const sumLng = coords.reduce((sum, c) => sum + c[1], 0);
@@ -41,7 +41,7 @@ export function calculateCentroid(coords) {
 }
 
 // Calculate target zoom level based on geocoding item precision
-export function getZoomForPlace(item) {
+function getZoomForPlace(item) {
   const type = (item.type || "").toLowerCase();
   const cls = (item.class || "").toLowerCase();
 
@@ -77,7 +77,7 @@ export function getZoomForPlace(item) {
 }
 
 // Helper to format clean display address
-export function formatAddressLabel(item) {
+function formatAddressLabel(item) {
   const addr = item.address || {};
   const mainPart = item.name || addr.road || addr.suburb || addr.neighbourhood || addr.village || addr.town || addr.city || "Location";
   
@@ -127,7 +127,7 @@ export default function PlantationMap({
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
   const [searchStatus, setSearchStatus] = useState(null); // { type: 'loading'|'success'|'error'|'info', text: '' }
-  const [selectedAddress, setSelectedAddress] = useState("");
+  const [, setSelectedAddress] = useState("");
 
   // Satellite tile provider (Esri World Imagery)
   const satelliteUrl = import.meta.env.VITE_SATELLITE_TILE_URL || 
@@ -179,6 +179,7 @@ export default function PlantationMap({
       map.remove();
       mapInstanceRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Leaflet map/layers are managed imperatively; re-running on these values would recreate the map
   }, []);
 
   // Sync active tile layer
@@ -190,6 +191,7 @@ export default function PlantationMap({
     const newTileLayer = L.tileLayer(newUrl, { maxZoom: 19 }).addTo(mapInstanceRef.current);
     newTileLayer.bringToBack();
     tileLayerRef.current = newTileLayer;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Leaflet map/layers are managed imperatively; re-running on these values would recreate the map
   }, [activeLayer]);
 
   // Sync polygon & markers onto map
@@ -259,6 +261,7 @@ export default function PlantationMap({
         });
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Leaflet map/layers are managed imperatively; re-running on these values would recreate the map
   }, [polygonCoords]);
 
   // Address-Level Geocoding Search Handler (Sections 8-11)

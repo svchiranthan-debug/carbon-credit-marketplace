@@ -35,6 +35,7 @@ from .ai.ai_vision_service import validate_image_file
 from .ai.cv_service import CVService
 from .ai.ndvi_service import NDVIService, PROVENANCE_REPORTED
 from .ai.soc_service import SOCService
+from .geometry import lonlat_ring
 from .risk_engine import RiskEngine
 
 ENGINE_NAME = "VERIFICATION_ENGINE"
@@ -113,6 +114,7 @@ class VerificationEngine:
             "missing_modalities": missing,
             "evidence_status": {
                 "boundary": "PROVIDED" if has_boundary else "NOT PROVIDED",
+                "boundary_type": "POLYGON" if plantation.boundary_geojson else "CENTRE_AND_AREA",
                 "ground_imagery": "PROVIDED" if image_ok else ("INVALID" if plantation.image_url else "NOT PROVIDED"),
                 "soil_carbon": "PROVIDED" if has_soil else "NOT PROVIDED",
                 # NDVI is measured during a verification run; before that it is pending.
@@ -130,6 +132,7 @@ class VerificationEngine:
             "latitude": plantation.latitude,
             "longitude": plantation.longitude,
             "area_hectares": plantation.area_hectares,
+            "boundary_geojson": plantation.boundary_geojson,
             "tree_count": plantation.tree_count,
             "image_url": plantation.image_url,
             "image_sha256": _sha256(image_path),
@@ -198,6 +201,7 @@ class VerificationEngine:
             latitude=plantation.latitude,
             longitude=plantation.longitude,
             area_hectares=plantation.area_hectares,
+            boundary_lonlat=lonlat_ring(plantation.boundary_geojson) or None,
             reported_value=plantation.ndvi_reported_value,
             reported_source=plantation.ndvi_reported_source,
             reported_date=plantation.ndvi_reported_date,
@@ -226,7 +230,8 @@ class VerificationEngine:
             else "UNAVAILABLE"
         )
         result["evidence_snapshot"]["ndvi_measurement"] = {
-            k: ndvi.get(k) for k in ("provenance", "satellite_source", "acquisition_date", "cloud_cover_pct", "valid_pixel_count")
+            k: ndvi.get(k) for k in ("provenance", "satellite_source", "acquisition_date", "cloud_cover_pct",
+                                     "valid_pixel_count", "clear_pixel_pct", "footprint_type")
         }
         result["evidence_snapshot"]["cv_measurement"] = {
             "model_name": cv["model_name"], "model_version": cv["model_version"],
@@ -318,7 +323,8 @@ class VerificationEngine:
         result["evidence_summary"] = summary
         result["limitations_disclaimer"] = (
             "Prototype verification — not a certified carbon-registry methodology. The ground-photo "
-            "classifier was trained only on synthetic images and has no real-world validation. "
+            "classifier was trained on real scene photos (forest vs. built/other scenes) but has not "
+            "been tested on real plantation field photos. "
             "Carbon quantities use a simple per-tree sequestration assumption."
         )
         return result

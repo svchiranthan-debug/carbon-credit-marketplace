@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { Suspense, lazy, useState } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import DisclaimerBanner from "./components/DisclaimerBanner";
 import Navbar from "./components/Navbar";
@@ -6,28 +6,28 @@ import Sidebar from "./components/Sidebar";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { getRoleDashboardView, isRouteAllowed } from "./utils/roleRouting";
 
-// Pages
-import LandingPage from "./pages/LandingPage";
-import LoginPage from "./pages/LoginPage";
-import RegisterPage from "./pages/RegisterPage";
-import FarmerDashboard from "./pages/FarmerDashboard";
-import CreatePlantationPage from "./pages/CreatePlantationPage";
-import VerificationReportPage from "./pages/VerificationReportPage";
-import MarketplacePage from "./pages/MarketplacePage";
-import CreditDetailsPage from "./pages/CreditDetailsPage";
-import BuyerDashboard from "./pages/BuyerDashboard";
-import TransactionHistoryPage from "./pages/TransactionHistoryPage";
-import AdminDashboard from "./pages/AdminDashboard";
-import FarmerPlantationsPage from "./pages/FarmerPlantationsPage";
-import FarmerCarbonAssetsPage from "./pages/FarmerCarbonAssetsPage";
-import AuditorQueuePage from "./pages/AuditorQueuePage";
+// Pages are code-split: each loads on first visit, keeping the initial bundle small.
+const LandingPage = lazy(() => import("./pages/LandingPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const RegisterPage = lazy(() => import("./pages/RegisterPage"));
+const FarmerDashboard = lazy(() => import("./pages/FarmerDashboard"));
+const CreatePlantationPage = lazy(() => import("./pages/CreatePlantationPage"));
+const VerificationReportPage = lazy(() => import("./pages/VerificationReportPage"));
+const MarketplacePage = lazy(() => import("./pages/MarketplacePage"));
+const CreditDetailsPage = lazy(() => import("./pages/CreditDetailsPage"));
+const BuyerDashboard = lazy(() => import("./pages/BuyerDashboard"));
+const TransactionHistoryPage = lazy(() => import("./pages/TransactionHistoryPage"));
+const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
+const FarmerPlantationsPage = lazy(() => import("./pages/FarmerPlantationsPage"));
+const FarmerCarbonAssetsPage = lazy(() => import("./pages/FarmerCarbonAssetsPage"));
+const AuditorQueuePage = lazy(() => import("./pages/AuditorQueuePage"));
 
 function AppContent() {
-  const { user, isAuthenticated, role, loading } = useAuth();
+  const { isAuthenticated, role, loading } = useAuth();
   const [currentView, setCurrentView] = useState("landing");
   const [portalRole, setPortalRole] = useState(null);
-  const [selectedPlantationId, setSelectedPlantationId] = useState(1);
-  const [selectedCreditId, setSelectedCreditId] = useState("CC-2026-001");
+  const [selectedPlantationId, setSelectedPlantationId] = useState(null);
+  const [selectedCreditId, setSelectedCreditId] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Check if current view is public or authenticated portal view
@@ -204,16 +204,19 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-[#FAF9F6] text-slate-900 flex flex-col font-sans selection:bg-forest-100 selection:text-forest-900">
-      {/* Top Academic Prototype Disclaimer */}
-      <DisclaimerBanner />
+      {/* Header (offset on desktop so the fixed sidebar does not cover it) */}
+      <div className={showSidebar ? "lg:pl-56" : ""}>
+        {/* Top Academic Prototype Disclaimer */}
+        <DisclaimerBanner />
 
-      {/* Main Top Header Navbar */}
-      <Navbar 
-        currentView={currentView} 
-        setCurrentView={setCurrentView} 
-        toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-        setPortalRole={setPortalRole}
-      />
+        {/* Main Top Header Navbar */}
+        <Navbar
+          currentView={currentView}
+          setCurrentView={setCurrentView}
+          toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          setPortalRole={setPortalRole}
+        />
+      </div>
 
       {/* Optional Authenticated Sidebar */}
       {showSidebar && (
@@ -228,7 +231,9 @@ function AppContent() {
       {/* Main View Container (offset by sidebar width on desktop when authenticated) */}
       <main className={`flex-1 pb-16 transition-all duration-200 ${showSidebar ? "lg:pl-64" : ""}`}>
         <ErrorBoundary onReset={() => setCurrentView(getRoleDashboardView(role))}>
-          {renderView()}
+          <Suspense fallback={<div className="py-20 text-center text-xs text-slate-500">Loading…</div>}>
+            {renderView()}
+          </Suspense>
         </ErrorBoundary>
       </main>
     </div>

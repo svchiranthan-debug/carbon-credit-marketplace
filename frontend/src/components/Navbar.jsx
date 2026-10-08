@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { getRoleDashboardView } from "../utils/roleRouting";
 
-export default function Navbar({ currentView, setCurrentView, toggleSidebar, setPortalRole }) {
+export default function Navbar({ setCurrentView, toggleSidebar, setPortalRole }) {
   const { user, isAuthenticated, role, logout } = useAuth();
 
   const handleBrandClick = () => {

@@ -1,6 +1,6 @@
 {
-  "model_name": "MobileNetV3-Small-Agroforestry",
-  "model_version": "1.0.0",
+  "model_name": "MobileNetV3-Small-Plantation",
+  "model_version": "2.0.0",
   "architecture": "MobileNetV3-Small",
   "classes": [
     "non_plantation",
@@ -14,69 +14,117 @@
   },
   "input_resolution": "224x224",
   "preprocessing": "RGB, resize to 224x224, ToTensor, ImageNet mean/std normalisation",
-  "training_data": "Procedurally generated synthetic images from ml/prepare_dataset.py (40 train + 15 val per class). No real field photographs.",
-  "validation_note": "best_val_accuracy_pct is accuracy on the synthetic validation split only. No real-world validation has been performed; do not cite it as field accuracy.",
-  "best_val_accuracy_pct": 100.0,
-  "epochs_trained": 8,
-  "training_device": "mps",
-  "trained_at": "2026-09-13T07:52:03.114201",
-  "training_duration_seconds": 20.44,
+  "training_data": "Real photographs from the Intel Image Classification dataset (GitHub mirror luangtatipsy/intel-image-classification @ fbb0210). plantation = 'forest' photos; non_plantation = 'buildings', 'street', 'sea', 'glacier'; unclear_evidence = real photos with synthetic blur/darkness/over-exposure/occlusion. See ml/build_real_dataset.py.",
+  "validation_note": "Test metrics are on the source dataset's held-out test split (real photos, never used in training). The dataset contains no areca/coconut/agroforestry plantation photos, so accuracy on real plantation field photos has NOT been measured.",
+  "initialisation": "initialised from plantation_classifier_v1.pt (previous project checkpoint)",
+  "split_sizes": {
+    "train": 6127,
+    "val": 683,
+    "test": 1420
+  },
+  "hyperparameters": {
+    "epochs": 6,
+    "batch_size": 32,
+    "lr": 0.0003,
+    "optimizer": "AdamW(wd=1e-4)",
+    "schedule": "cosine",
+    "label_smoothing": 0.05,
+    "augmentation": "RandomResizedCrop(0.6-1.0), HFlip, ColorJitter"
+  },
+  "best_val_accuracy": 0.9985,
+  "test_metrics": {
+    "accuracy": 0.9838,
+    "macro_f1": 0.9838,
+    "per_class": {
+      "non_plantation": {
+        "precision": 0.9768,
+        "recall": 0.9809,
+        "f1": 0.9789,
+        "support": 472
+      },
+      "plantation": {
+        "precision": 0.9812,
+        "recall": 0.9916,
+        "f1": 0.9864,
+        "support": 474
+      },
+      "unclear_evidence": {
+        "precision": 0.9936,
+        "recall": 0.9789,
+        "f1": 0.9862,
+        "support": 474
+      }
+    },
+    "confusion_matrix": {
+      "labels": [
+        "non_plantation",
+        "plantation",
+        "unclear_evidence"
+      ],
+      "rows_true_cols_pred": [
+        [
+          463,
+          7,
+          2
+        ],
+        [
+          3,
+          470,
+          1
+        ],
+        [
+          8,
+          2,
+          464
+        ]
+      ]
+    }
+  },
   "history": [
     {
       "epoch": 1,
-      "train_loss": 0.3051,
-      "train_acc": 86.67,
-      "val_loss": 0.1495,
-      "val_acc": 97.78
+      "train_loss": 0.327,
+      "train_acc": 0.9514,
+      "val_acc": 0.9985,
+      "elapsed_s": 127.5
     },
     {
       "epoch": 2,
-      "train_loss": 0.0009,
-      "train_acc": 100.0,
-      "val_loss": 0.0172,
-      "val_acc": 100.0
+      "train_loss": 0.2191,
+      "train_acc": 0.9838,
+      "val_acc": 0.9912,
+      "elapsed_s": 244.7
     },
     {
       "epoch": 3,
-      "train_loss": 0.0003,
-      "train_acc": 100.0,
-      "val_loss": 0.0015,
-      "val_acc": 100.0
+      "train_loss": 0.205,
+      "train_acc": 0.9871,
+      "val_acc": 0.9927,
+      "elapsed_s": 356.2
     },
     {
       "epoch": 4,
-      "train_loss": 0.0593,
-      "train_acc": 98.33,
-      "val_loss": 0.0932,
-      "val_acc": 93.33
+      "train_loss": 0.1978,
+      "train_acc": 0.991,
+      "val_acc": 0.9956,
+      "elapsed_s": 469.5
     },
     {
       "epoch": 5,
-      "train_loss": 0.0154,
-      "train_acc": 99.17,
-      "val_loss": 0.0152,
-      "val_acc": 100.0
+      "train_loss": 0.1916,
+      "train_acc": 0.9935,
+      "val_acc": 0.9956,
+      "elapsed_s": 582.6
     },
     {
       "epoch": 6,
-      "train_loss": 0.0148,
-      "train_acc": 100.0,
-      "val_loss": 0.0203,
-      "val_acc": 100.0
-    },
-    {
-      "epoch": 7,
-      "train_loss": 0.0003,
-      "train_acc": 100.0,
-      "val_loss": 0.0307,
-      "val_acc": 97.78
-    },
-    {
-      "epoch": 8,
-      "train_loss": 0.0018,
-      "train_acc": 100.0,
-      "val_loss": 0.0177,
-      "val_acc": 97.78
+      "train_loss": 0.1894,
+      "train_acc": 0.9943,
+      "val_acc": 0.9956,
+      "elapsed_s": 697.9
     }
-  ]
+  ],
+  "trained_at": "2026-10-08T07:48:28+00:00",
+  "training_device": "cpu",
+  "seed": 20261008
 }

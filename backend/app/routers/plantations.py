@@ -15,6 +15,7 @@ from ..models.plantation import Plantation, PlantationStatus
 from ..models.user import User, UserRole
 from ..schemas.schemas import PlantationCreate, PlantationEvidenceUpdate, PlantationResponse
 from ..services.ai.ai_vision_service import validate_image_file
+from ..services.geometry import to_geojson_polygon
 from ..services.verification_engine import resolve_upload_path
 
 router = APIRouter(prefix="/plantations", tags=["Plantations"])
@@ -121,6 +122,8 @@ def create_plantation(
         )
 
     data = plantation_in.model_dump()
+    boundary = data.pop("boundary", None)
+    data["boundary_geojson"] = to_geojson_polygon(boundary) if boundary else None
     data["image_url"] = image_url
     data["farmer_name"] = plantation_in.farmer_name or current_user.full_name
     plantation = Plantation(farmer_id=current_user.id, status=PlantationStatus.SUBMITTED.value, **data)

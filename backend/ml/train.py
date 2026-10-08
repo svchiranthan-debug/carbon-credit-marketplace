@@ -1,169 +1,236 @@
-import os
+"""
+Trains the ground-photo classifier (MobileNetV3-Small, 3 classes) on REAL photographs.
+
+    python ml/build_real_dataset.py      # once: builds ml/dataset_real/{train,val,test}
+    python ml/train.py                   # trains, keeps the best epoch on val, evaluates on test
+
+Outputs
+    ml/weights/plantation_classifier_v2.pt   checkpoint (model_state_dict + class_to_idx)
+    ml/weights/model_metadata.json           training settings, per-epoch history, test metrics
+    ml/reports/evaluation_v2.md              human-readable evaluation report
+
+The test split (from the source dataset's own test set) is used exactly once, after training.
+Input contract (must match app/services/ai/ai_vision_service.py): RGB, resize 224x224,
+ImageNet mean/std normalisation.
+"""
+import argparse
 import json
+import os
+import random
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms, models
+from torchvision import datasets, models, transforms
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "dataset")
-WEIGHTS_DIR = os.path.join(BASE_DIR, "weights")
-os.makedirs(WEIGHTS_DIR, exist_ok=True)
+ML_DIR = Path(__file__).resolve().parent
+DATA_DIR = ML_DIR / "dataset_real"
+WEIGHTS_DIR = ML_DIR / "weights"
+REPORTS_DIR = ML_DIR / "reports"
+MODEL_PATH = WEIGHTS_DIR / "plantation_classifier_v2.pt"
+METADATA_PATH = WEIGHTS_DIR / "model_metadata.json"
+INIT_CHECKPOINT = WEIGHTS_DIR / "plantation_classifier_v1.pt"
 
-MODEL_SAVE_PATH = os.path.join(WEIGHTS_DIR, "plantation_classifier_v1.pt")
-METADATA_SAVE_PATH = os.path.join(WEIGHTS_DIR, "model_metadata.json")
-
-# Hyperparameters
-BATCH_SIZE = 16
-NUM_EPOCHS = 8
-LEARNING_RATE = 0.001
-NUM_CLASSES = 3
 CLASSES = ["non_plantation", "plantation", "unclear_evidence"]
+MEAN, STD = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+SEED = 20261008
 
-def get_transforms():
-    train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(15),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    
-    val_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    
-    return train_transform, val_transform
 
-def build_model():
-    print("Initializing lightweight MobileNetV3-Small architecture for MacBook Air M2...")
-    try:
-        # Load pre-trained weights if network allows
-        weights = models.MobileNet_V3_Small_Weights.DEFAULT
-        model = models.mobilenet_v3_small(weights=weights)
-    except Exception:
-        # Fallback to initialized MobileNetV3
-        model = models.mobilenet_v3_small(weights=None)
-        
-    in_features = model.classifier[3].in_features
-    # Replace final classification head with 3 classes
-    model.classifier[3] = nn.Linear(in_features, NUM_CLASSES)
-    return model
+def transforms_for(train: bool):
+    if train:
+        return transforms.Compose([
+            transforms.RandomResizedCrop(224, scale=(0.6, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.2),
+            transforms.ToTensor(),
+            transforms.Normalize(MEAN, STD),
+        ])
+    return transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize(MEAN, STD)])
 
-def train_model():
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"Using compute device: {device}")
-    
-    train_transform, val_transform = get_transforms()
-    
-    train_dataset = datasets.ImageFolder(os.path.join(DATA_DIR, "train"), transform=train_transform)
-    val_dataset = datasets.ImageFolder(os.path.join(DATA_DIR, "val"), transform=val_transform)
-    
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-    
-    print(f"Class mapping: {train_dataset.class_to_idx}")
-    
-    model = build_model().to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    
-    start_time = time.time()
-    best_val_acc = 0.0
-    history = []
-    
-    print(f"\n--- Starting Training ({NUM_EPOCHS} Epochs) ---")
-    for epoch in range(1, NUM_EPOCHS + 1):
+
+def build_model(init_from: Path = None):
+    model = models.mobilenet_v3_small(weights=None)
+    model.classifier[3] = nn.Linear(model.classifier[3].in_features, len(CLASSES))
+    init_note = "random initialisation"
+    if init_from and init_from.exists():
+        ckpt = torch.load(init_from, map_location="cpu")
+        model.load_state_dict(ckpt["model_state_dict"])
+        init_note = f"initialised from {init_from.name} (previous project checkpoint)"
+    return model, init_note
+
+
+@torch.no_grad()
+def predict(model, loader):
+    model.eval()
+    ys, ps = [], []
+    for x, y in loader:
+        ps.append(model(x).argmax(1))
+        ys.append(y)
+    return torch.cat(ys).numpy(), torch.cat(ps).numpy()
+
+
+def metrics(y_true, y_pred, n_classes):
+    cm = np.zeros((n_classes, n_classes), dtype=int)
+    for t, p in zip(y_true, y_pred):
+        cm[t, p] += 1
+    per_class = {}
+    for i in range(n_classes):
+        tp = cm[i, i]
+        prec = tp / cm[:, i].sum() if cm[:, i].sum() else 0.0
+        rec = tp / cm[i, :].sum() if cm[i, :].sum() else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+        per_class[CLASSES[i]] = {"precision": round(float(prec), 4), "recall": round(float(rec), 4),
+                                 "f1": round(float(f1), 4), "support": int(cm[i, :].sum())}
+    acc = float(np.trace(cm) / cm.sum())
+    macro_f1 = float(np.mean([v["f1"] for v in per_class.values()]))
+    return {"accuracy": round(acc, 4), "macro_f1": round(macro_f1, 4), "per_class": per_class,
+            "confusion_matrix": {"labels": CLASSES, "rows_true_cols_pred": cm.tolist()}}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--epochs", type=int, default=6)
+    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--from-scratch", action="store_true", help="do not initialise from the v1 checkpoint")
+    args = ap.parse_args()
+
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    torch.set_num_threads(max(1, os.cpu_count() or 1))
+
+    train_ds = datasets.ImageFolder(DATA_DIR / "train", transform=transforms_for(True))
+    val_ds = datasets.ImageFolder(DATA_DIR / "val", transform=transforms_for(False))
+    test_ds = datasets.ImageFolder(DATA_DIR / "test", transform=transforms_for(False))
+    assert train_ds.classes == CLASSES, train_ds.classes
+    loaders = {
+        "train": DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=1),
+        "val": DataLoader(val_ds, batch_size=64, num_workers=1),
+        "test": DataLoader(test_ds, batch_size=64, num_workers=1),
+    }
+
+    model, init_note = build_model(None if args.from_scratch else INIT_CHECKPOINT)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+
+    history, best_val, best_state = [], -1.0, None
+    t0 = time.time()
+    for epoch in range(1, args.epochs + 1):
         model.train()
-        running_loss = 0.0
-        correct = 0
-        total = 0
-        
-        for inputs, labels in train_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
+        loss_sum, correct, seen = 0.0, 0, 0
+        for x, y in loaders["train"]:
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            out = model(x)
+            loss = criterion(out, y)
             loss.backward()
             optimizer.step()
-            
-            running_loss += loss.item() * inputs.size(0)
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
-            
-        train_loss = running_loss / total
-        train_acc = (correct / total) * 100.0
-        
-        # Validation phase
-        model.eval()
-        val_loss = 0.0
-        val_correct = 0
-        val_total = 0
-        with torch.no_grad():
-            for inputs, labels in val_loader:
-                inputs, labels = inputs.to(device), labels.to(device)
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item() * inputs.size(0)
-                _, predicted = outputs.max(1)
-                val_total += labels.size(0)
-                val_correct += predicted.eq(labels).sum().item()
-                
-        val_loss = val_loss / val_total
-        val_acc = (val_correct / val_total) * 100.0
-        
-        print(f"Epoch [{epoch:02d}/{NUM_EPOCHS:02d}] - "
-              f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.1f}% | "
-              f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.1f}%")
-              
-        history.append({
-            "epoch": epoch,
-            "train_loss": round(train_loss, 4),
-            "train_acc": round(train_acc, 2),
-            "val_loss": round(val_loss, 4),
-            "val_acc": round(val_acc, 2)
-        })
-        
-        if val_acc >= best_val_acc:
-            best_val_acc = val_acc
-            # Save PyTorch checkpoint
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "class_to_idx": train_dataset.class_to_idx,
-                "val_acc": val_acc
-            }, MODEL_SAVE_PATH)
+            loss_sum += loss.item() * y.size(0)
+            correct += (out.argmax(1) == y).sum().item()
+            seen += y.size(0)
+        scheduler.step()
+        yv, pv = predict(model, loaders["val"])
+        val_acc = float((yv == pv).mean())
+        history.append({"epoch": epoch, "train_loss": round(loss_sum / seen, 4),
+                        "train_acc": round(correct / seen, 4), "val_acc": round(val_acc, 4),
+                        "elapsed_s": round(time.time() - t0, 1)})
+        print(json.dumps(history[-1]), flush=True)
+        if val_acc > best_val:
+            best_val, best_state = val_acc, {k: v.clone() for k, v in model.state_dict().items()}
 
-    training_duration_sec = round(time.time() - start_time, 2)
-    print(f"\nTraining Complete in {training_duration_sec}s! Best Val Accuracy: {best_val_acc:.1f}%")
-    print(f"Model saved to: {MODEL_SAVE_PATH}")
-    
-    metadata = {
-        "model_name": "MobileNetV3-Small-Agroforestry",
-        "model_version": "1.0.0",
+    model.load_state_dict(best_state)
+    yt, pt = predict(model, loaders["test"])
+    test = metrics(yt, pt, len(CLASSES))
+    print("TEST", json.dumps(test), flush=True)
+
+    WEIGHTS_DIR.mkdir(exist_ok=True)
+    torch.save({"model_state_dict": model.state_dict(), "class_to_idx": train_ds.class_to_idx}, MODEL_PATH)
+
+    meta = {
+        "model_name": "MobileNetV3-Small-Plantation",
+        "model_version": "2.0.0",
         "architecture": "MobileNetV3-Small",
-        "classes": list(train_dataset.class_to_idx.keys()),
-        "class_to_idx": train_dataset.class_to_idx,
+        "classes": CLASSES,
+        "class_to_idx": train_ds.class_to_idx,
         "input_resolution": "224x224",
-        "best_val_accuracy_pct": round(best_val_acc, 2),
-        "epochs_trained": NUM_EPOCHS,
-        "training_device": str(device),
-        "trained_at": datetime.utcnow().isoformat(),
-        "training_duration_seconds": training_duration_sec,
-        "history": history
+        "preprocessing": "RGB, resize to 224x224, ToTensor, ImageNet mean/std normalisation",
+        "training_data": (
+            "Real photographs from the Intel Image Classification dataset (GitHub mirror "
+            "luangtatipsy/intel-image-classification @ fbb0210). plantation = 'forest' photos; "
+            "non_plantation = 'buildings', 'street', 'sea', 'glacier'; unclear_evidence = real photos "
+            "with synthetic blur/darkness/over-exposure/occlusion. See ml/build_real_dataset.py."
+        ),
+        "validation_note": (
+            "Test metrics are on the source dataset's held-out test split (real photos, never used in "
+            "training). The dataset contains no areca/coconut/agroforestry plantation photos, so "
+            "accuracy on real plantation field photos has NOT been measured."
+        ),
+        "initialisation": init_note,
+        "split_sizes": {"train": len(train_ds), "val": len(val_ds), "test": len(test_ds)},
+        "hyperparameters": {"epochs": args.epochs, "batch_size": args.batch_size, "lr": args.lr,
+                            "optimizer": "AdamW(wd=1e-4)", "schedule": "cosine", "label_smoothing": 0.05,
+                            "augmentation": "RandomResizedCrop(0.6-1.0), HFlip, ColorJitter"},
+        "best_val_accuracy": round(best_val, 4),
+        "test_metrics": test,
+        "history": history,
+        "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "training_device": "cpu",
+        "seed": SEED,
     }
-    
-    with open(METADATA_SAVE_PATH, "w") as f:
-        json.dump(metadata, f, indent=2)
-        
-    print(f"Model metadata saved to: {METADATA_SAVE_PATH}")
+    METADATA_PATH.write_text(json.dumps(meta, indent=2))
+    write_report(meta)
+    print(f"Saved {MODEL_PATH} and {METADATA_PATH}")
+
+
+def write_report(meta):
+    REPORTS_DIR.mkdir(exist_ok=True)
+    t = meta["test_metrics"]
+    rows = "\n".join(
+        f"| {c} | {v['precision']:.3f} | {v['recall']:.3f} | {v['f1']:.3f} | {v['support']} |"
+        for c, v in t["per_class"].items()
+    )
+    cm = t["confusion_matrix"]["rows_true_cols_pred"]
+    cm_rows = "\n".join(f"| **{CLASSES[i]}** | " + " | ".join(str(x) for x in r) + " |" for i, r in enumerate(cm))
+    hist = "\n".join(f"| {h['epoch']} | {h['train_loss']} | {h['train_acc']:.3f} | {h['val_acc']:.3f} |" for h in meta["history"])
+    (REPORTS_DIR / "evaluation_v2.md").write_text(f"""# Ground-photo classifier v2 — evaluation
+
+Model: {meta['model_name']} {meta['model_version']} ({meta['architecture']}), {meta['initialisation']}.
+Trained {meta['trained_at']} on CPU. Split sizes: {meta['split_sizes']}.
+
+## Data
+{meta['training_data']}
+
+## Held-out test set (real photos, never seen in training)
+
+Accuracy **{t['accuracy']:.3f}**, macro F1 **{t['macro_f1']:.3f}**.
+
+| Class | Precision | Recall | F1 | Support |
+|---|---|---|---|---|
+{rows}
+
+Confusion matrix (rows = true, columns = predicted):
+
+| | {' | '.join(CLASSES)} |
+|---|---|---|---|
+{cm_rows}
+
+## Training history
+
+| Epoch | Train loss | Train acc | Val acc |
+|---|---|---|---|
+{hist}
+
+## Limits — read before quoting these numbers
+- {meta['validation_note']}
+- "unclear_evidence" examples are real photos degraded synthetically; real bad field photos may look different.
+- Some source labels are noisy (for example, a few "glacier" photos show green slopes).
+""")
+
 
 if __name__ == "__main__":
-    train_model()
+    main()

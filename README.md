@@ -40,7 +40,7 @@ cd mobile && npm ci && npx expo start
 
 The mobile app finds the backend automatically at `http://<IP of the computer running Expo>:8000/api`. To override it, set `EXPO_PUBLIC_API_URL` in `mobile/.env` (see `mobile/.env.example`). The Android emulator falls back to `10.0.2.2`, and the iOS simulator and web fall back to `localhost`. Start uvicorn with `--host 0.0.0.0` so the phone can reach it.
 
-Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo` (plus `farmer2@…`, `buyer2@…`), all `Demo@123`.
+Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo` (plus `farmer2@…`, `buyer2@…`), all `Demo@123`. Sign in from the landing page portal cards (Farmer / Buyer / Auditor). Anyone can sign up as a farmer, buyer or auditor; the admin signs in through the Auditor portal. An admin can also create auditor accounts (Admin dashboard → "Create auditor account").
 
 ---
 
@@ -50,7 +50,7 @@ Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarb
 Farmer registers plot (boundary + area)                     status SUBMITTED, verification PENDING
    └─ submits ground photo + soil SOC (+ optional reported NDVI)
         └─ Verification run
-             NDVI   ← Sentinel-2 B04/B08 pixels over the plot   (or reported value + source + date)
+             NDVI   ← cloud-free Sentinel-2 B04/B08 pixels inside the drawn boundary   (or reported value + source + date)
              CV     ← MobileNetV3 ground-photo classifier
              SOC    ← soil test value, benchmarked
              Score = 0.40·NDVI + 0.35·CV + 0.25·SOC
@@ -79,7 +79,7 @@ These checks add up to a 0–100 risk score: reused photo (perceptual hash), non
 ## Tests
 
 ```bash
-cd backend && pytest                       # 78 tests; real-chain tests run if Ganache is on :8545
+cd backend && pytest                       # 88 tests; real-chain tests run if Ganache is on :8545
 cd frontend && npm run build && npm run lint
 cd mobile && npx tsc --noEmit && npx expo export --platform android
 ```
@@ -88,8 +88,8 @@ cd mobile && npx tsc --noEmit && npx expo export --platform android
 
 ## Limitations
 
-- **Ground-photo model**: trained and validated only on procedurally generated synthetic images (`backend/ml/prepare_dataset.py`). Its recorded 100% validation accuracy is on that synthetic data and says nothing about real photographs. It needs retraining on real field photos before its scores mean anything.
-- **Satellite NDVI**: computed from Sentinel-2 L2A over a square with the plot's area around its centroid (the drawn polygon is not stored by the backend). Pixels are not cloud-masked beyond the scene-level cloud filter (< 20%). This path needs internet access to Microsoft Planetary Computer, and it has not been exercised against the live service in the automated tests.
+- **Ground-photo model (v2)**: trained on ~6,100 real photographs (Intel Image Classification dataset) and scored 98.4% on 1,420 held-out real test photos (`backend/ml/reports/evaluation_v2.md`; the old synthetic-trained model scored 49.6% on the same photos). "Plantation" was learned from forest photos because the dataset has no areca, coconut or agroforestry pictures, so accuracy on real plantation field photos is still unmeasured. Rebuild/retrain with `python ml/build_real_dataset.py && python ml/train.py` (~12 minutes on a laptop CPU).
+- **Satellite NDVI**: computed from Sentinel-2 L2A pixels inside the drawn boundary polygon (or, for plots registered with only a GPS point, a square of the plot's area around it). Cloud, shadow, cirrus and snow pixels are removed using the scene classification layer. This path needs internet access to Microsoft Planetary Computer. The automated tests use local GeoTIFF files, not the live service.
 - **Carbon quantity**: a flat per-tree assumption with species and practice multipliers. It is not an allometric or registry methodology.
 - **Blockchain**: local Ganache only. Users have custodial demo addresses and the backend signs every transaction.
 - **Payments**: none; purchases are recorded as prototype transactions.

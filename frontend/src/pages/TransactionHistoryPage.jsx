@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { useAuth } from "../context/AuthContext";
 import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
 import LoadError from "../components/LoadError";
@@ -15,8 +14,7 @@ import {
   X
 } from "lucide-react";
 
-export default function TransactionHistoryPage({ setCurrentView, setSelectedCreditId }) {
-  const { user } = useAuth();
+export default function TransactionHistoryPage() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
