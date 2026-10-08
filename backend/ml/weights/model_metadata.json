@@ -1,0 +1,82 @@
+{
+  "model_name": "MobileNetV3-Small-Agroforestry",
+  "model_version": "1.0.0",
+  "architecture": "MobileNetV3-Small",
+  "classes": [
+    "non_plantation",
+    "plantation",
+    "unclear_evidence"
+  ],
+  "class_to_idx": {
+    "non_plantation": 0,
+    "plantation": 1,
+    "unclear_evidence": 2
+  },
+  "input_resolution": "224x224",
+  "preprocessing": "RGB, resize to 224x224, ToTensor, ImageNet mean/std normalisation",
+  "training_data": "Procedurally generated synthetic images from ml/prepare_dataset.py (40 train + 15 val per class). No real field photographs.",
+  "validation_note": "best_val_accuracy_pct is accuracy on the synthetic validation split only. No real-world validation has been performed; do not cite it as field accuracy.",
+  "best_val_accuracy_pct": 100.0,
+  "epochs_trained": 8,
+  "training_device": "mps",
+  "trained_at": "2026-09-13T07:52:03.114201",
+  "training_duration_seconds": 20.44,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.3051,
+      "train_acc": 86.67,
+      "val_loss": 0.1495,
+      "val_acc": 97.78
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.0009,
+      "train_acc": 100.0,
+      "val_loss": 0.0172,
+      "val_acc": 100.0
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.0003,
+      "train_acc": 100.0,
+      "val_loss": 0.0015,
+      "val_acc": 100.0
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.0593,
+      "train_acc": 98.33,
+      "val_loss": 0.0932,
+      "val_acc": 93.33
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.0154,
+      "train_acc": 99.17,
+      "val_loss": 0.0152,
+      "val_acc": 100.0
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.0148,
+      "train_acc": 100.0,
+      "val_loss": 0.0203,
+      "val_acc": 100.0
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.0003,
+      "train_acc": 100.0,
+      "val_loss": 0.0307,
+      "val_acc": 97.78
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.0018,
+      "train_acc": 100.0,
+      "val_loss": 0.0177,
+      "val_acc": 97.78
+    }
+  ]
+}
