@@ -20,9 +20,9 @@ def generate_plantation_image(seed: int, size=(256, 256)) -> Image.Image:
     # Green/brown palette
     base = np.zeros((size[1], size[0], 3), dtype=np.uint8)
     # Forest floor / canopy variation
-    green_channel = np.clip(np.random.normal(130, 30, size), 60, 220)
-    red_channel = np.clip(green_channel * 0.45 + np.random.normal(20, 10, size), 20, 120)
-    blue_channel = np.clip(green_channel * 0.35 + np.random.normal(15, 8, size), 15, 90)
+    green_channel = np.clip(np.random.normal(130, 30, (size[1], size[0])), 60, 220)
+    red_channel = np.clip(green_channel * 0.45 + np.random.normal(20, 10, (size[1], size[0])), 20, 120)
+    blue_channel = np.clip(green_channel * 0.35 + np.random.normal(15, 8, (size[1], size[0])), 15, 90)
     
     base[:, :, 0] = red_channel.astype(np.uint8)
     base[:, :, 1] = green_channel.astype(np.uint8)
@@ -56,19 +56,19 @@ def generate_non_plantation_image(seed: int, size=(256, 256)) -> Image.Image:
     # Concrete gray / asphalt dark / red brick
     scene_type = seed % 3
     if scene_type == 0:  # Concrete / Road gray
-        gray = np.clip(np.random.normal(140, 15, size), 90, 200).astype(np.uint8)
+        gray = np.clip(np.random.normal(140, 15, (size[1], size[0])), 90, 200).astype(np.uint8)
         base[:, :, 0] = gray
         base[:, :, 1] = gray
         base[:, :, 2] = gray
     elif scene_type == 1:  # Red brick / building
-        r = np.clip(np.random.normal(170, 20, size), 110, 230).astype(np.uint8)
+        r = np.clip(np.random.normal(170, 20, (size[1], size[0])), 110, 230).astype(np.uint8)
         g = np.clip(r * 0.4, 30, 90).astype(np.uint8)
         b = np.clip(r * 0.35, 20, 80).astype(np.uint8)
         base[:, :, 0] = r
         base[:, :, 1] = g
         base[:, :, 2] = b
     else:  # Blue/metallic facade
-        b = np.clip(np.random.normal(160, 20, size), 100, 220).astype(np.uint8)
+        b = np.clip(np.random.normal(160, 20, (size[1], size[0])), 100, 220).astype(np.uint8)
         base[:, :, 0] = (b * 0.7).astype(np.uint8)
         base[:, :, 1] = (b * 0.75).astype(np.uint8)
         base[:, :, 2] = b

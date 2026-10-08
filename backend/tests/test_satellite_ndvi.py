@@ -111,3 +111,26 @@ def test_reported_ndvi_requires_source_and_date():
     nd = NDVIService.analyze_ndvi(latitude=1, longitude=1, reported_value=0.6,
                                   reported_source="TEST FIXTURE", reported_date="2026-09-01")
     assert nd["provenance"] == "REPORTED" and nd["is_real_satellite"] is False and nd["ndvi_score"] is not None
+
+
+def test_band_window_read_from_real_geotiff(tmp_path):
+    """Exercises the rasterio windowed read on a local GeoTIFF (UTM 43N, 10 m pixels)."""
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import from_origin
+    from rasterio.warp import transform as warp_transform
+
+    lon, lat = 75.2, 12.75
+    xs, ys = warp_transform("EPSG:4326", "EPSG:32643", [lon], [lat])
+    origin_x, origin_y = xs[0] - 500, ys[0] + 500
+    data = np.arange(100 * 100, dtype=np.uint16).reshape(100, 100) + 1
+    path = tmp_path / "band.tif"
+    with rasterio.open(path, "w", driver="GTiff", width=100, height=100, count=1, dtype="uint16",
+                       crs="EPSG:32643", transform=from_origin(origin_x, origin_y, 10, 10)) as dst:
+        dst.write(data, 1)
+
+    bbox = sc.footprint_bbox(lat, lon, 0.4047)  # ~64 m square → ~6-7 pixels per side
+    window = sc.SatelliteClient._read_band_window(str(path), bbox)
+    assert 5 <= window.shape[0] <= 8 and 5 <= window.shape[1] <= 8
+    # The window is centred on the plantation: pixel (50, 50) of the raster
+    centre = data[50, 50]
+    assert window.min() <= centre <= window.max()

@@ -181,12 +181,12 @@ export default function MarketplacePage({ setCurrentView, setSelectedCreditId })
                           <span className="font-mono text-[11px] text-slate-400 font-semibold">
                             Asset ID: <strong className="text-slate-900 font-bold">{credit.id}</strong>
                           </span>
-                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                            Provenance: VERIFIED
+                          <span className="text-[10px] font-bold text-slate-700 bg-slate-50 px-1.5 py-0.2 rounded border border-slate-200">
+                            Chain: {credit.blockchain_status || "NOT_RECORDED"}
                           </span>
                         </div>
                         <h2 className="text-sm font-bold text-slate-900 tracking-tight mt-1">
-                          {credit.plantation_name || "Agroforestry Project"}
+                          {credit.plantation_name || "—"}
                         </h2>
                         <div className="flex items-center gap-1 text-slate-500 text-[11px] mt-0.5">
                           <MapPin className="w-3 h-3 text-slate-400 flex-shrink-0" />

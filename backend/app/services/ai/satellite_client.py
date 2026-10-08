@@ -117,7 +117,6 @@ class SatelliteClient:
             "collections": [COLLECTION],
             "limit": 10,
             "query": {"eo:cloud_cover": {"lt": max_cloud_cover}},
-            "sortby": [{"field": "properties.eo:cloud_cover", "direction": "asc"}],
         }
         headers = {"Accept": "application/geo+json"}
         if settings.PLANETARY_COMPUTER_API_KEY:
