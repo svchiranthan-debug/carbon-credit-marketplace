@@ -1,6 +1,6 @@
 import re
 from datetime import date, datetime
-from typing import Any, Literal, Optional, List, Dict
+from typing import Any, Optional, List, Dict
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")

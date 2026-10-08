@@ -1,14 +1,10 @@
-import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..database import get_db
 from ..models.user import User, UserRole
-from ..models.plantation import Plantation, PlantationStatus
-from ..models.verification import Verification, VerificationDecision
+from ..models.plantation import Plantation
 from ..models.credit import Credit, CreditStatus
-from ..models.audit_log import AuditLog
 from ..schemas.schemas import CarbonEstimateResponse, IssueCreditsRequest, CreditResponse
 from typing import Optional
 

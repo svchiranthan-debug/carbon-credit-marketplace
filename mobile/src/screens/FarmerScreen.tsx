@@ -128,10 +128,8 @@ export default function FarmerScreen() {
   // Upload Evidence for Existing Plantation
   const handleUploadForPlantation = async (plotId: number, uri: string) => {
     setUploadingImage(true);
-    console.log(`[Mobile MRV] Uploading ground photo for plot #${plotId}...`);
     try {
       const res = await api.uploadPlantationImage(plotId, uri);
-      console.log(`[Mobile MRV] Upload complete: ${res.image_url}`);
       Alert.alert(
         "GROUND EVIDENCE CAPTURED",
         "Ground photo successfully uploaded to backend. You can now execute multi-modal verification."
@@ -175,10 +173,8 @@ export default function FarmerScreen() {
   // Run Multi-Modal Verification
   const handleRunVerification = async (plotId: number) => {
     setLoading(true);
-    console.log(`[Mobile MRV] Running verification for plot #${plotId}...`);
     try {
       const ver = await api.runVerification(plotId);
-      console.log(`[Mobile MRV] Verification success: Decision=${ver.decision}, Score=${ver.overall_score}`);
       setVerification(ver);
       Alert.alert(
         "Verification Complete",
@@ -252,17 +248,14 @@ export default function FarmerScreen() {
     }
 
     if (submittingRef.current || submitting) {
-      console.log("[Mobile MRV] Submission already in flight. Ignoring duplicate tap.");
       return;
     }
 
     submittingRef.current = true;
     setSubmitting(true);
-    console.log(`[Mobile MRV] Submit pressed: "${name.trim()}" (Trees: ${parsedTrees}, Area: ${parsedArea}ha, SOC: ${parsedSoc ?? "None"})`);
 
     try {
       // 1. Create plantation
-      console.log(`[Mobile MRV] Creating plantation record at ${API_BASE_URL}/plantations`);
       const newPlot = await api.createPlantation({
         name: name.trim(),
         location: locationLabel || `${latNum.toFixed(5)}, ${lonNum.toFixed(5)}`,
@@ -276,16 +269,13 @@ export default function FarmerScreen() {
         plantation_type: "Agroforestry"
       });
 
-      console.log(`[Mobile MRV] Plantation created: Plot #${newPlot.id}`);
 
       // 2. Upload ground evidence photo if captured
       let uploadedImagePath: string | undefined = undefined;
       if (imageUri) {
-        console.log(`[Mobile MRV] Uploading ground photo for plot #${newPlot.id}...`);
         try {
           const uploadRes = await api.uploadPlantationImage(newPlot.id, imageUri);
           uploadedImagePath = uploadRes.image_url;
-          console.log(`[Mobile MRV] Image uploaded for plot #${newPlot.id}: ${uploadedImagePath}`);
         } catch (imgErr: any) {
           console.error(`[Mobile MRV] Image upload failed: ${imgErr.message}`);
           Alert.alert(
@@ -299,16 +289,12 @@ export default function FarmerScreen() {
           setVerification(null);
           return;
         }
-      } else {
-        console.log(`[Mobile MRV] Notice: Plot #${newPlot.id} submitted without ground photo.`);
       }
 
       // 3. Trigger multi-modal verification
-      console.log(`[Mobile MRV] Running verification for plot #${newPlot.id}...`);
       try {
         // Evidence is already attached to the plantation; just run the verification.
         const ver = await api.runVerification(newPlot.id);
-        console.log(`[Mobile MRV] Verification response: Decision=${ver.decision}, Score=${ver.overall_score}`);
         setVerification(ver);
 
         const scoreText = ver.overall_score !== null ? `${ver.overall_score} / 100` : "PENDING (Evidence required)";

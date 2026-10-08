@@ -1,3 +1,5 @@
+> **Archived (superseded 2026-10-08).** This September walkthrough describes behaviour that has since been removed or corrected: simulated NDVI used for scoring, a fixed-score showcase plot, and fixed fallback values in the UI. See `docs/PROJECT_STATUS.md` for the current state.
+
 # Walkthrough: Final Demo-Readiness Quality Pass
 
 ## Overview

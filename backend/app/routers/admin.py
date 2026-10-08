@@ -7,7 +7,7 @@ from ..database import get_db
 from ..models.user import User, UserRole
 from ..models.plantation import Plantation, PlantationStatus
 from ..models.verification import Verification, VerificationDecision
-from ..models.credit import Credit, CreditStatus
+from ..models.credit import Credit
 from ..models.transaction import Transaction
 from ..models.audit_log import AuditLog
 from ..schemas.schemas import AdminMetricsResponse, AdminDecisionRequest, VerificationResponse, AuditLogResponse
@@ -15,7 +15,7 @@ from ..services.carbon_engine import CarbonEngine, CreditIssuanceError
 from ..services.verification_store import (
     DECISION_TO_PLANTATION_STATUS, PreviewVerification, hydrate, latest_verification,
 )
-from ..core.security import get_current_user, require_role
+from ..core.security import require_role
 
 router = APIRouter(prefix="/admin", tags=["Admin Dashboard & Management"])
 
