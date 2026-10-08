@@ -1,6 +1,17 @@
-from datetime import datetime
-from typing import Optional, List, Dict
-from pydantic import BaseModel, Field
+import re
+from datetime import date, datetime
+from typing import Any, Literal, Optional, List, Dict
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+SELF_REGISTER_ROLES = {"FARMER", "BUYER", "AUDITOR"}
+
+
+def _clean(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
 
 # --- AUTH SCHEMAS ---
 class UserBase(BaseModel):
@@ -11,7 +22,31 @@ class UserBase(BaseModel):
     organization: Optional[str] = None
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not EMAIL_RE.match(v):
+            raise ValueError("Enter a valid email address.")
+        return v
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Full name is required.")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if v not in SELF_REGISTER_ROLES:
+            raise ValueError("Role must be one of FARMER, BUYER, AUDITOR.")
+        return v
 
 class UserLogin(BaseModel):
     email: str
@@ -36,34 +71,105 @@ class TokenData(BaseModel):
     role: Optional[str] = None
 
 # --- PLANTATION SCHEMAS ---
-class PlantationCreate(BaseModel):
-    name: str = Field(..., example="Kaveri River Agroforestry Plot")
-    farmer_name: str = Field(..., example="Ramesh Kumar")
-    location: str = Field(..., example="Mandya, Karnataka, India")
-    latitude: float = Field(..., ge=-90, le=90, example=12.5218)
-    longitude: float = Field(..., ge=-180, le=180, example=76.8951)
-    area_hectares: float = Field(..., gt=0, example=2.5)
-    plantation_age_years: float = Field(..., ge=0, example=4.0)
-    tree_count: int = Field(..., gt=0, example=500)
-    tree_species: str = Field(..., example="Teak, Neem, Melia Dubia")
-    plantation_type: str = Field(..., example="Agroforestry")
-    sustainable_practice: Optional[str] = Field(None, example="Organic Mulching & Drip Irrigation")
-    image_url: Optional[str] = None
-    
-    # Soil inputs (Optional during initial draft registration with boundary only)
-    soil_soc_pct: Optional[float] = Field(None, ge=0, le=10, example=1.85)
-    soil_depth_cm: Optional[float] = Field(None, ge=0, le=300, example=45.0)
-    soil_type: Optional[str] = Field(None, example="Red Sandy Loam")
+class ReportedNDVIMixin(BaseModel):
+    """NDVI measured outside this backend (e.g. Copernicus Browser). All three fields go together."""
+    ndvi_reported_value: Optional[float] = Field(None, ge=-1, le=1, examples=[0.68])
+    ndvi_reported_source: Optional[str] = Field(None, max_length=200, examples=["Copernicus Browser, Sentinel-2 L2A NDVI"])
+    ndvi_reported_date: Optional[str] = Field(None, examples=["2026-09-20"], description="Acquisition date, YYYY-MM-DD")
 
-class PlantationEvidenceUpdate(BaseModel):
-    image_url: Optional[str] = None
-    soil_soc_pct: Optional[float] = Field(None, ge=0, le=10, example=1.85)
-    soil_depth_cm: Optional[float] = Field(None, ge=0, le=300, example=45.0)
-    soil_type: Optional[str] = Field(None, example="Red Sandy Loam")
+    @field_validator("ndvi_reported_source")
+    @classmethod
+    def _src(cls, v):
+        return _clean(v)
 
-class PlantationResponse(PlantationCreate):
+    @field_validator("ndvi_reported_date")
+    @classmethod
+    def _date(cls, v):
+        v = _clean(v)
+        if v is None:
+            return None
+        try:
+            d = date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("ndvi_reported_date must be YYYY-MM-DD.")
+        if d > date.today():
+            raise ValueError("ndvi_reported_date cannot be in the future.")
+        return d.isoformat()
+
+    @model_validator(mode="after")
+    def _ndvi_complete(self):
+        fields = (self.ndvi_reported_value, self.ndvi_reported_source, self.ndvi_reported_date)
+        if any(f is not None for f in fields) and not all(f is not None for f in fields):
+            raise ValueError("Reported NDVI needs ndvi_reported_value, ndvi_reported_source and ndvi_reported_date together.")
+        return self
+
+
+class PlantationCreate(ReportedNDVIMixin):
+    name: str = Field(..., min_length=1, max_length=200, examples=["Kaveri River Agroforestry Plot"])
+    farmer_name: Optional[str] = Field(None, max_length=200, examples=["Ramesh Kumar"])
+    location: str = Field(..., min_length=1, max_length=300, examples=["Mandya, Karnataka, India"])
+    latitude: float = Field(..., ge=-90, le=90, examples=[12.5218])
+    longitude: float = Field(..., ge=-180, le=180, examples=[76.8951])
+    area_hectares: float = Field(..., gt=0, le=10000, examples=[0.4047])
+    plantation_age_years: float = Field(..., ge=0, le=200, examples=[4.0])
+    tree_count: int = Field(..., gt=0, le=10_000_000, examples=[500])
+    tree_species: str = Field(..., min_length=1, max_length=300, examples=["Areca"])
+    plantation_type: str = Field(..., min_length=1, max_length=100, examples=["Agroforestry"])
+    sustainable_practice: Optional[str] = Field(None, max_length=200)
+    image_url: Optional[str] = Field(None, max_length=500)
+
+    # Soil inputs (optional at registration; verification stays PENDING without them)
+    soil_soc_pct: Optional[float] = Field(None, gt=0, le=10, examples=[1.85])
+    soil_depth_cm: Optional[float] = Field(None, gt=0, le=300, examples=[30.0])
+    soil_type: Optional[str] = Field(None, max_length=100, examples=["Red Sandy Loam"])
+
+    @field_validator("name", "location", "tree_species", "plantation_type")
+    @classmethod
+    def _required_text(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("This field cannot be blank.")
+        return v
+
+    @field_validator("farmer_name", "sustainable_practice", "image_url", "soil_type")
+    @classmethod
+    def _optional_text(cls, v):
+        return _clean(v)
+
+
+class PlantationEvidenceUpdate(ReportedNDVIMixin):
+    image_url: Optional[str] = Field(None, max_length=500)
+    soil_soc_pct: Optional[float] = Field(None, gt=0, le=10, examples=[1.85])
+    soil_depth_cm: Optional[float] = Field(None, gt=0, le=300, examples=[30.0])
+    soil_type: Optional[str] = Field(None, max_length=100, examples=["Red Sandy Loam"])
+
+    @field_validator("image_url", "soil_type")
+    @classmethod
+    def _optional_text(cls, v):
+        return _clean(v)
+
+
+class PlantationResponse(BaseModel):
     id: int
     farmer_id: int
+    name: str
+    farmer_name: str
+    location: str
+    latitude: float
+    longitude: float
+    area_hectares: float
+    plantation_age_years: float
+    tree_count: int
+    tree_species: str
+    plantation_type: str
+    sustainable_practice: Optional[str] = None
+    image_url: Optional[str] = None
+    soil_soc_pct: Optional[float] = None
+    soil_depth_cm: Optional[float] = None
+    soil_type: Optional[str] = None
+    ndvi_reported_value: Optional[float] = None
+    ndvi_reported_source: Optional[str] = None
+    ndvi_reported_date: Optional[str] = None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -111,13 +217,17 @@ class VerificationFormulaBreakdown(BaseModel):
     formula_text: str = "Verification Score = (0.40 × NDVI) + (0.35 × CV) + (0.25 × SOC)"
 
 class VerificationRunRequest(BaseModel):
-    plantation_id: int
-    ground_image_path: Optional[str] = None
-    soc_sample_pct: Optional[float] = None
+    plantation_id: int = Field(..., gt=0)
+    ground_image_path: Optional[str] = Field(None, max_length=500, description="An /uploads/<file> URL returned by an upload endpoint")
+    soc_sample_pct: Optional[float] = Field(None, gt=0, le=10)
 
 class VerificationResponse(BaseModel):
-    id: str
+    id: Optional[str] = None            # None when no verification has been run yet (preview)
+    is_persisted: bool = True
     plantation_id: int
+    plantation_status: Optional[str] = None
+    tree_count: Optional[int] = None
+    tree_species: Optional[str] = None
     plantation_name: Optional[str] = None
     farmer_name: Optional[str] = None
     location: Optional[str] = None
@@ -127,18 +237,18 @@ class VerificationResponse(BaseModel):
     # Modality 1
     ndvi_value: Optional[float] = None
     ndvi_score: Optional[float] = None
-    ndvi_status: str
+    ndvi_status: Optional[str] = None
     
     # Modality 2
     image_quality_score: Optional[float] = None
     vegetation_detection_score: Optional[float] = None
     cv_score: Optional[float] = None
-    cv_detection_status: str
+    cv_detection_status: Optional[str] = None
     
     # Modality 3
     soc_pct: Optional[float] = None
     soc_score: Optional[float] = None
-    soc_status: str
+    soc_status: Optional[str] = None
     
     # Weights & Contributions
     ndvi_weight: float = 0.40
@@ -153,8 +263,15 @@ class VerificationResponse(BaseModel):
     evidence_summary: Optional[str] = None
     evidence_status: Optional[Dict[str, str]] = None
     missing_evidence: Optional[List[str]] = None
-    limitations_disclaimer: str
-    verified_at: datetime
+    current_missing_evidence: Optional[List[str]] = None
+    decision_reasons: Optional[List[str]] = None
+    evidence_snapshot: Optional[Dict[str, Any]] = None
+    engine_decision: Optional[str] = None
+    decided_by: Optional[str] = None
+    auditor_notes: Optional[str] = None
+    ndvi_provenance: Optional[str] = None
+    limitations_disclaimer: Optional[str] = None
+    verified_at: Optional[datetime] = None
 
     # Satellite & Remote Sensing Provenance
     is_real_satellite: Optional[bool] = False
@@ -166,16 +283,16 @@ class VerificationResponse(BaseModel):
     vegetation_coverage_pct: Optional[float] = None
 
     # AI Deep Learning Vision
-    ai_model_name: Optional[str] = "MobileNetV3-Plantation-v1"
-    ai_model_version: Optional[str] = "1.0.0"
+    ai_model_name: Optional[str] = None
+    ai_model_version: Optional[str] = None
     ai_predicted_class: Optional[str] = None
     ai_confidence_pct: Optional[float] = None
     prediction_label: Optional[str] = None
 
     # Risk & Fraud Detection Assessment
-    risk_score: Optional[float] = 0.0
-    risk_level: Optional[str] = "LOW"
-    risk_factors: Optional[List[str]] = []
+    risk_score: Optional[float] = None
+    risk_level: Optional[str] = None
+    risk_factors: Optional[List[str]] = None
     risk_explanation: Optional[str] = None
 
     class Config:
@@ -200,7 +317,7 @@ class CarbonEstimateResponse(BaseModel):
     eligibility_reason: str
 
 class IssueCreditsRequest(BaseModel):
-    price_per_tco2e: Optional[float] = 1500.0
+    price_per_tco2e: Optional[float] = Field(None, gt=0, le=1_000_000)
 
 # --- CREDIT & MARKETPLACE SCHEMAS ---
 class CreditResponse(BaseModel):
@@ -226,12 +343,16 @@ class CreditResponse(BaseModel):
     ndvi_score: Optional[float] = None
     cv_score: Optional[float] = None
     soc_score: Optional[float] = None
+    ndvi_provenance: Optional[str] = None
+    plantation_status: Optional[str] = None
+    is_listed: Optional[bool] = None  # True only if the credit currently meets every marketplace rule
 
     # Blockchain audit layer
     blockchain_tx_hash: Optional[str] = None
     blockchain_contract_address: Optional[str] = None
-    blockchain_status: Optional[str] = "CONFIRMED"
+    blockchain_status: Optional[str] = None
     report_hash: Optional[str] = None
+    retirement_tx_hash: Optional[str] = None
     is_retired: Optional[bool] = False
     retired_at: Optional[datetime] = None
 
@@ -240,7 +361,8 @@ class CreditResponse(BaseModel):
 
 # --- TRANSACTION SCHEMAS ---
 class PurchaseRequest(BaseModel):
-    quantity_tco2e: Optional[float] = None  # None means buy all or full credit
+    # Credits are sold as whole lots. If given, the quantity must equal the lot size.
+    quantity_tco2e: Optional[float] = Field(None, gt=0)
 
 class TransactionResponse(BaseModel):
     id: str
@@ -258,7 +380,8 @@ class TransactionResponse(BaseModel):
     payment_method: str
     certificate_id: Optional[str] = None
     blockchain_tx_hash: Optional[str] = None
-    notes: str
+    blockchain_status: Optional[str] = None
+    notes: Optional[str] = None
     timestamp: datetime
 
     class Config:
@@ -266,21 +389,33 @@ class TransactionResponse(BaseModel):
 
 class BlockchainRecordResponse(BaseModel):
     credit_id: str
+    on_chain: bool                      # True only if the record below was read from the contract
+    source: str                         # "CONTRACT" or "DATABASE_ONLY"
+    blockchain_status: Optional[str] = None
     plantation_id: int
     carbon_quantity_tco2e: float
-    report_hash: str
-    owner_address: str
-    issued_at_timestamp: int
+    report_hash: Optional[str] = None
+    owner_address: Optional[str] = None
+    issued_at_timestamp: Optional[int] = None
     is_retired: bool
-    retired_at_timestamp: int
-    contract_address: str
-    transaction_hash: str
+    retired_at_timestamp: Optional[int] = None
+    contract_address: Optional[str] = None
+    transaction_hash: Optional[str] = None
     status: str
+    note: Optional[str] = None
 
 # --- ADMIN SCHEMAS ---
 class AdminDecisionRequest(BaseModel):
     decision: str  # APPROVED, REJECTED, REVIEW
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=2000)
+
+    @field_validator("decision")
+    @classmethod
+    def _decision(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if v not in {"APPROVED", "REJECTED", "REVIEW"}:
+            raise ValueError("decision must be APPROVED, REJECTED or REVIEW.")
+        return v
 
 class AdminMetricsResponse(BaseModel):
     total_farmers: int

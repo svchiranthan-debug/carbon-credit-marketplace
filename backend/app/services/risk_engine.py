@@ -67,9 +67,6 @@ class RiskEngine:
             for other in other_plantations:
                 if current_plantation_id and other.id == current_plantation_id:
                     continue
-                # Skip seed showcase templates / identical demo preset runs from false-positive collisions
-                if other.id in (1, 2, 3) or ("Mandya" in (other.name or "") and "Mandya" in (getattr(db.query(Plantation).get(current_plantation_id), 'name', '') if current_plantation_id else '')):
-                    continue
                 if not other.image_url:
                     continue
 
@@ -121,7 +118,7 @@ class RiskEngine:
         # -------------------------------------------------------------
         # 2. AI VISION CLASSIFICATION & CONFIDENCE (+20 to +40 Risk)
         # -------------------------------------------------------------
-        pred_class = cv_res.get("predicted_class", "").lower()
+        pred_class = (cv_res.get("predicted_class") or "").lower()
         ai_conf = cv_res.get("confidence_pct", 0.0) or 0.0
 
         if pred_class == "non_plantation":
@@ -206,11 +203,10 @@ class RiskEngine:
         if db is not None and plantation.latitude and plantation.longitude:
             overlap = db.query(Plantation).filter(
                 Plantation.id != plantation.id,
-                Plantation.id > 3,
                 Plantation.latitude.between(plantation.latitude - 0.0001, plantation.latitude + 0.0001),
                 Plantation.longitude.between(plantation.longitude - 0.0001, plantation.longitude + 0.0001)
             ).first()
-            if overlap and not ("Mandya" in (plantation.name or "") and "Mandya" in (overlap.name or "")):
+            if overlap:
                 penalty = 30
                 msg = f"Geographic coordinates overlap with previously registered plantation #{overlap.id} ('{overlap.name}')"
                 risk_score += penalty

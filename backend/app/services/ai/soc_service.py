@@ -31,7 +31,7 @@ class SOCService:
         soil_depth_cm: Optional[float] = None,
         soil_type: Optional[str] = None
     ) -> Dict[str, Any]:
-        if soc_pct is None or soc_pct <= 0:
+        if soc_pct is None or not isinstance(soc_pct, (int, float)) or soc_pct <= 0 or soc_pct > 10:
             return {
                 "soc_pct": None,
                 "soc_score": None,
@@ -41,13 +41,9 @@ class SOCService:
                 "reason": "Soil organic carbon data is required for soil verification."
             }
 
-        effective_soil_type = soil_type or "Loam"
-        effective_depth = soil_depth_cm if (soil_depth_cm and soil_depth_cm > 0) else 30.0
-        soil_factor = cls.SOIL_TYPE_FACTORS.get(effective_soil_type, 1.0)
-        
-        # Depth weighting: standard carbon sampling is top 0-30cm and 30-60cm
-        depth_factor = min(1.15, max(0.85, (effective_depth / 30.0) ** 0.15))
-        
+        # Soil type adjusts the score slightly (retention capacity). Unknown types use a neutral 1.0.
+        soil_factor = cls.SOIL_TYPE_FACTORS.get(soil_type, 1.0) if soil_type else 1.0
+
         # Base SOC score from percentage
         if soc_pct >= 2.2:
             base_score = 85.0 + min(15.0, (soc_pct - 2.2) * 12.0)
@@ -68,7 +64,12 @@ class SOCService:
             "soc_pct": round(soc_pct, 2),
             "soc_score": final_score,
             "soil_status": status,
-            "baseline_benchmark": f"{soil_type} Standard Profile (~{round(1.4 * soil_factor, 2)}% target SOC)",
+            "baseline_benchmark": (
+                f"{soil_type} profile (soil factor {soil_factor})" if soil_type
+                else "Soil type not provided (neutral soil factor 1.0)"
+            ),
+            "soil_factor": soil_factor,
+            "provided": True,
             "depth_analyzed_cm": soil_depth_cm,
             "soil_type": soil_type
         }

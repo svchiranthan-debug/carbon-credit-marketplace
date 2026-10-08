@@ -1,271 +1,249 @@
-import json
-import os
+"""
+Ethereum audit layer for carbon credits (CarbonCreditRegistry on a local Ganache chain).
+
+What is real here:
+  * When Ganache is reachable, credits are issued, transferred and retired by sending real
+    transactions to the deployed CarbonCreditRegistry contract; tx hashes come from mined
+    receipts.
+
+What is NOT real / is a prototype simplification:
+  * Users have no wallets. Each user is mapped to one of Ganache's unlocked development
+    accounts (custodial demo addresses) and the backend signs everything with account[0],
+    the contract admin.
+  * The contract's ``carbonQuantity`` field holds kilograms of CO2e (tCO2e × 1000) so that
+    fractional tonnages are stored exactly.
+
+Failure policy: if the chain is disabled or unreachable, or a transaction reverts, the
+result has ``status`` NOT_RECORDED or FAILED and ``tx_hash`` None. A transaction hash is
+never invented.
+"""
 import hashlib
-from datetime import datetime
+import json
+import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+from ..config import settings
 
 try:
     from web3 import Web3
-except ImportError:
+except ImportError:  # web3 is optional; without it the chain is simply unavailable
     Web3 = None
 
+logger = logging.getLogger(__name__)
+
+STATUS_CONFIRMED = "CONFIRMED"
+STATUS_NOT_RECORDED = "NOT_RECORDED"
+STATUS_FAILED = "FAILED"
+
+KG_PER_TONNE = 1000
+
+
+def _hex(value: Any) -> str:
+    h = value.hex() if hasattr(value, "hex") else str(value)
+    return h if h.startswith("0x") else f"0x{h}"
+
+
 class BlockchainService:
-    """
-    Ethereum-compatible Blockchain Audit & Ownership Layer.
-    Interacts with the CarbonCreditRegistry smart contract deployed on local Ganache.
-    """
-    _instance = None
     _w3 = None
     _contract = None
-    _contract_address = None
+    _contract_address: Optional[str] = None
     _abi = None
 
-    RPC_URL = os.getenv("ETHEREUM_RPC_URL", "http://127.0.0.1:8545")
-    CONTRACT_ARTIFACT_PATH = Path(__file__).resolve().parent.parent.parent / "contracts" / "CarbonCreditRegistry.json"
-    DEPLOYED_ADDR_PATH = Path(__file__).resolve().parent.parent.parent / "contracts" / "deployed_address.txt"
+    CONTRACTS_DIR = Path(__file__).resolve().parent.parent.parent / "contracts"
+    CONTRACT_ARTIFACT_PATH = CONTRACTS_DIR / "CarbonCreditRegistry.json"
+    DEPLOYED_ADDR_PATH = CONTRACTS_DIR / "deployed_address.txt"
+
+    # ------------------------------------------------------------------ connection
+    @classmethod
+    def get_w3(cls):
+        if not settings.ENABLE_BLOCKCHAIN or Web3 is None:
+            return None
+        if cls._w3 is not None:
+            try:
+                if cls._w3.is_connected():
+                    return cls._w3
+            except Exception:
+                pass
+            cls._w3 = cls._contract = None
+        try:
+            w3 = Web3(Web3.HTTPProvider(settings.ETHEREUM_RPC_URL, request_kwargs={"timeout": 5}))
+            if w3.is_connected():
+                cls._w3 = w3
+        except Exception as exc:
+            logger.info("Ethereum node not reachable at %s: %s", settings.ETHEREUM_RPC_URL, exc)
+        return cls._w3
 
     @classmethod
-    def get_w3(cls) -> Optional[Any]:
-        if cls._w3 is None and Web3 is not None:
-            try:
-                w3 = Web3(Web3.HTTPProvider(cls.RPC_URL))
-                if w3.is_connected():
-                    cls._w3 = w3
-            except Exception as e:
-                print(f"⚠️ Warning: Could not connect to Ethereum node at {cls.RPC_URL}: {e}")
-                cls._w3 = None
-        return cls._w3
+    def status(cls) -> Dict[str, Any]:
+        w3 = cls.get_w3()
+        contract = cls.get_contract() if w3 else None
+        return {
+            "enabled": settings.ENABLE_BLOCKCHAIN,
+            "web3_installed": Web3 is not None,
+            "rpc_url": settings.ETHEREUM_RPC_URL,
+            "connected": w3 is not None,
+            "chain_id": w3.eth.chain_id if w3 else None,
+            "contract_address": cls._contract_address if contract else None,
+        }
 
     @classmethod
     def deploy_contract(cls, force_new: bool = False):
         w3 = cls.get_w3()
         if not w3 or not cls.CONTRACT_ARTIFACT_PATH.exists():
             return None
-
         try:
-            with open(cls.CONTRACT_ARTIFACT_PATH, "r") as f:
-                artifact = json.load(f)
+            artifact = json.loads(cls.CONTRACT_ARTIFACT_PATH.read_text())
             cls._abi = artifact["abi"]
-            bytecode = artifact["bytecode"]
 
             address = None
             if not force_new and cls.DEPLOYED_ADDR_PATH.exists():
-                saved_addr = cls.DEPLOYED_ADDR_PATH.read_text().strip()
-                if w3.is_address(saved_addr):
-                    code = w3.eth.get_code(saved_addr)
-                    if code and len(code) > 0:
-                        address = saved_addr
+                saved = cls.DEPLOYED_ADDR_PATH.read_text().strip()
+                if w3.is_address(saved) and len(w3.eth.get_code(Web3.to_checksum_address(saved))) > 0:
+                    address = Web3.to_checksum_address(saved)
 
-            if not address and len(w3.eth.accounts) > 0:
-                admin_account = w3.eth.accounts[0]
-                contract_factory = w3.eth.contract(abi=cls._abi, bytecode=bytecode)
-                tx_hash = contract_factory.constructor().transact({"from": admin_account})
-                receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            if not address:
+                if not w3.eth.accounts:
+                    return None
+                factory = w3.eth.contract(abi=cls._abi, bytecode=artifact["bytecode"])
+                receipt = w3.eth.wait_for_transaction_receipt(
+                    factory.constructor().transact({"from": w3.eth.accounts[0]}), timeout=30
+                )
                 address = receipt.contractAddress
                 cls.DEPLOYED_ADDR_PATH.write_text(address)
-                print(f"🔗 CarbonCreditRegistry Smart Contract deployed at: {address}")
+                logger.info("CarbonCreditRegistry deployed at %s", address)
 
-            if address:
-                cls._contract_address = address
-                cls._contract = w3.eth.contract(address=address, abi=cls._abi)
-                return cls._contract
-        except Exception as e:
-            print(f"⚠️ Warning: Error initializing CarbonCreditRegistry contract: {e}")
+            cls._contract_address = address
+            cls._contract = w3.eth.contract(address=address, abi=cls._abi)
+            return cls._contract
+        except Exception as exc:
+            logger.warning("Could not initialise CarbonCreditRegistry: %s", exc)
+            cls._contract = None
             return None
 
     @classmethod
     def get_contract(cls):
+        w3 = cls.get_w3()
+        if not w3:
+            return None
         if cls._contract is not None:
-            return cls._contract
+            try:
+                if len(w3.eth.get_code(cls._contract_address)) > 0:
+                    return cls._contract
+            except Exception:
+                pass
+            cls._contract = None  # chain was reset; redeploy / reload below
         return cls.deploy_contract(force_new=False)
 
     @classmethod
-    def compute_report_hash(cls, verification_data: Any) -> str:
-        """
-        Computes an immutable SHA-256 digest of the verification audit certificate.
-        """
-        if hasattr(verification_data, "id"):
-            raw = f"{verification_data.id}:{verification_data.plantation_id}:{verification_data.overall_score}:{verification_data.verified_at}"
-        elif isinstance(verification_data, dict):
-            raw = f"{verification_data.get('id')}:{verification_data.get('plantation_id')}:{verification_data.get('overall_score')}:{verification_data.get('verified_at')}"
-        else:
-            raw = str(verification_data)
+    def address_for_user(cls, user_id: Optional[int]) -> Optional[str]:
+        """Deterministic custodial demo address for a platform user (Ganache account 1..n-1)."""
+        w3 = cls.get_w3()
+        if not w3:
+            return None
+        accounts = w3.eth.accounts
+        if len(accounts) < 2:
+            return accounts[0] if accounts else None
+        return accounts[1 + ((user_id or 0) % (len(accounts) - 1))]
 
+    # ------------------------------------------------------------------ hashing
+    @classmethod
+    def compute_report_hash(cls, verification: Any) -> str:
+        """SHA-256 over the verification's identity, score, decision and evidence snapshot."""
+        if hasattr(verification, "id"):
+            payload = {
+                "id": verification.id,
+                "plantation_id": verification.plantation_id,
+                "overall_score": verification.overall_score,
+                "decision": verification.decision,
+                "evidence_snapshot": getattr(verification, "evidence_snapshot", None),
+            }
+        elif isinstance(verification, dict):
+            payload = {k: verification.get(k) for k in ("id", "plantation_id", "overall_score", "decision", "evidence_snapshot")}
+        else:
+            payload = {"value": str(verification)}
+        raw = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
+    # ------------------------------------------------------------------ transactions
     @classmethod
-    def register_credit_on_chain(
-        cls,
-        credit_id: str,
-        plantation_id: int,
-        carbon_quantity_tco2e: float,
-        report_hash: str,
-        owner_address: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Executes issueCredit on CarbonCreditRegistry smart contract.
-        """
-        contract = cls.get_contract()
-        w3 = cls.get_w3()
-
-        # Fallback simulation if blockchain node is offline
-        if not contract or not w3 or len(w3.eth.accounts) == 0:
-            tx_hash = "0x" + hashlib.sha256(f"issue:{credit_id}:{datetime.utcnow().isoformat()}".encode()).hexdigest()
-            contract_addr = cls._contract_address or "0xe78A0F7E598Cc8b0Bb87894B0F60dD2a88d6a8Ab"
-            return {
-                "tx_hash": tx_hash,
-                "block_number": 1,
-                "contract_address": contract_addr,
-                "status": "CONFIRMED"
-            }
-
-        try:
-            admin = w3.eth.accounts[0]
-            owner = owner_address or (w3.eth.accounts[1] if len(w3.eth.accounts) > 1 else admin)
-            qty_int = int(round(carbon_quantity_tco2e))
-
-            # Check if already exists
-            if contract.functions.creditExists(credit_id).call():
-                return {
-                    "tx_hash": "0x" + hashlib.sha256(f"existing:{credit_id}".encode()).hexdigest(),
-                    "block_number": w3.eth.block_number,
-                    "contract_address": cls._contract_address,
-                    "status": "CONFIRMED"
-                }
-
-            tx = contract.functions.issueCredit(
-                credit_id,
-                int(plantation_id),
-                qty_int,
-                report_hash,
-                owner
-            ).transact({"from": admin})
-
-            receipt = w3.eth.wait_for_transaction_receipt(tx)
-            return {
-                "tx_hash": receipt.transactionHash.hex(),
-                "block_number": receipt.blockNumber,
-                "contract_address": cls._contract_address,
-                "status": "CONFIRMED"
-            }
-        except Exception as e:
-            print(f"⚠️ Error executing issueCredit on-chain: {e}")
-            tx_hash = "0x" + hashlib.sha256(f"issue_fallback:{credit_id}:{e}".encode()).hexdigest()
-            return {
-                "tx_hash": tx_hash,
-                "block_number": w3.eth.block_number if w3 else 1,
-                "contract_address": cls._contract_address or "0xe78A0F7E598Cc8b0Bb87894B0F60dD2a88d6a8Ab",
-                "status": "CONFIRMED"
-            }
+    def _unavailable(cls, reason: str) -> Dict[str, Any]:
+        return {"status": STATUS_NOT_RECORDED, "tx_hash": None, "block_number": None,
+                "contract_address": None, "reason": reason}
 
     @classmethod
-    def transfer_credit_on_chain(
-        cls,
-        credit_id: str,
-        new_owner_address: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Executes transferCredit on CarbonCreditRegistry smart contract upon marketplace purchase.
-        """
+    def _send(cls, fn_name: str, *args) -> Dict[str, Any]:
         contract = cls.get_contract()
         w3 = cls.get_w3()
-
-        if not contract or not w3 or len(w3.eth.accounts) == 0:
-            tx_hash = "0x" + hashlib.sha256(f"transfer:{credit_id}:{datetime.utcnow().isoformat()}".encode()).hexdigest()
-            return {
-                "tx_hash": tx_hash,
-                "block_number": 2,
-                "status": "CONFIRMED"
-            }
-
+        if not w3:
+            return cls._unavailable("Blockchain disabled or node unreachable.")
+        if not contract:
+            return cls._unavailable("CarbonCreditRegistry contract unavailable.")
         try:
-            admin = w3.eth.accounts[0]
-            new_owner = new_owner_address or (w3.eth.accounts[2] if len(w3.eth.accounts) > 2 else admin)
+            tx = getattr(contract.functions, fn_name)(*args).transact({"from": w3.eth.accounts[0]})
+            receipt = w3.eth.wait_for_transaction_receipt(tx, timeout=30)
+            if receipt.status != 1:
+                return {"status": STATUS_FAILED, "tx_hash": _hex(receipt.transactionHash), "block_number": receipt.blockNumber,
+                        "contract_address": cls._contract_address, "reason": "Transaction reverted."}
+            return {"status": STATUS_CONFIRMED, "tx_hash": _hex(receipt.transactionHash),
+                    "block_number": receipt.blockNumber, "contract_address": cls._contract_address, "reason": None}
+        except Exception as exc:
+            logger.warning("On-chain %s failed: %s", fn_name, exc)
+            return {"status": STATUS_FAILED, "tx_hash": None, "block_number": None,
+                    "contract_address": cls._contract_address, "reason": f"{exc.__class__.__name__}: {exc}"[:300]}
 
-            tx = contract.functions.transferCredit(credit_id, new_owner).transact({"from": admin})
-            receipt = w3.eth.wait_for_transaction_receipt(tx)
+    @classmethod
+    def register_credit_on_chain(cls, credit_id: str, plantation_id: int, carbon_quantity_tco2e: float,
+                                 report_hash: str, owner_user_id: Optional[int] = None) -> Dict[str, Any]:
+        contract = cls.get_contract()
+        if contract is not None:
+            try:
+                if contract.functions.creditExists(credit_id).call():
+                    return {"status": STATUS_FAILED, "tx_hash": None, "block_number": None,
+                            "contract_address": cls._contract_address,
+                            "reason": "Credit ID already registered on-chain."}
+            except Exception:
+                pass
+        owner = cls.address_for_user(owner_user_id)
+        qty_kg = int(round(carbon_quantity_tco2e * KG_PER_TONNE))
+        res = cls._send("issueCredit", credit_id, int(plantation_id), qty_kg, report_hash, owner) if owner else \
+            cls._unavailable("Blockchain disabled or node unreachable.")
+        res["owner_address"] = owner if res["status"] == STATUS_CONFIRMED else None
+        return res
 
-            return {
-                "tx_hash": receipt.transactionHash.hex(),
-                "block_number": receipt.blockNumber,
-                "status": "CONFIRMED"
-            }
-        except Exception as e:
-            print(f"⚠️ Error executing transferCredit on-chain: {e}")
-            tx_hash = "0x" + hashlib.sha256(f"transfer_fallback:{credit_id}:{e}".encode()).hexdigest()
-            return {
-                "tx_hash": tx_hash,
-                "block_number": w3.eth.block_number if w3 else 2,
-                "status": "CONFIRMED"
-            }
+    @classmethod
+    def transfer_credit_on_chain(cls, credit_id: str, new_owner_user_id: Optional[int] = None) -> Dict[str, Any]:
+        new_owner = cls.address_for_user(new_owner_user_id)
+        if not new_owner:
+            return cls._unavailable("Blockchain disabled or node unreachable.")
+        res = cls._send("transferCredit", credit_id, new_owner)
+        res["owner_address"] = new_owner if res["status"] == STATUS_CONFIRMED else None
+        return res
 
     @classmethod
     def retire_credit_on_chain(cls, credit_id: str) -> Dict[str, Any]:
-        """
-        Executes retireCredit on CarbonCreditRegistry smart contract to permanently burn/retire the offset.
-        """
-        contract = cls.get_contract()
-        w3 = cls.get_w3()
-
-        if not contract or not w3 or len(w3.eth.accounts) == 0:
-            tx_hash = "0x" + hashlib.sha256(f"retire:{credit_id}:{datetime.utcnow().isoformat()}".encode()).hexdigest()
-            return {
-                "tx_hash": tx_hash,
-                "block_number": 3,
-                "status": "RETIRED",
-                "retired_at": datetime.utcnow()
-            }
-
-        try:
-            admin = w3.eth.accounts[0]
-            tx = contract.functions.retireCredit(credit_id).transact({"from": admin})
-            receipt = w3.eth.wait_for_transaction_receipt(tx)
-
-            return {
-                "tx_hash": receipt.transactionHash.hex(),
-                "block_number": receipt.blockNumber,
-                "status": "RETIRED",
-                "retired_at": datetime.utcnow()
-            }
-        except Exception as e:
-            print(f"⚠️ Error executing retireCredit on-chain: {e}")
-            tx_hash = "0x" + hashlib.sha256(f"retire_fallback:{credit_id}:{e}".encode()).hexdigest()
-            return {
-                "tx_hash": tx_hash,
-                "block_number": w3.eth.block_number if w3 else 3,
-                "status": "RETIRED",
-                "retired_at": datetime.utcnow()
-            }
+        return cls._send("retireCredit", credit_id)
 
     @classmethod
     def get_on_chain_record(cls, credit_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Queries the smart contract for the verified credit state.
-        """
         contract = cls.get_contract()
-        w3 = cls.get_w3()
-
-        if not contract or not w3:
+        if not contract:
             return None
-
         try:
             if not contract.functions.creditExists(credit_id).call():
                 return None
-
-            data = contract.functions.getCredit(credit_id).call()
+            d = contract.functions.getCredit(credit_id).call()
             return {
-                "credit_id": data[0],
-                "plantation_id": data[1],
-                "carbon_quantity_tco2e": float(data[2]),
-                "report_hash": data[3],
-                "owner_address": data[4],
-                "issued_at_timestamp": data[5],
-                "is_retired": bool(data[6]),
-                "retired_at_timestamp": data[7],
+                "credit_id": d[0],
+                "plantation_id": d[1],
+                "carbon_quantity_tco2e": d[2] / KG_PER_TONNE,
+                "report_hash": d[3],
+                "owner_address": d[4],
+                "issued_at_timestamp": d[5],
+                "is_retired": bool(d[6]),
+                "retired_at_timestamp": d[7],
                 "contract_address": cls._contract_address,
-                "status": "RETIRED" if data[6] else "CONFIRMED"
             }
-        except Exception as e:
-            print(f"⚠️ Error reading getCredit on-chain: {e}")
+        except Exception as exc:
+            logger.warning("getCredit failed: %s", exc)
             return None

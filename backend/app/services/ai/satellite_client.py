@@ -1,308 +1,238 @@
-import os
-import math
+"""
+Sentinel-2 L2A NDVI client.
+
+Queries the Microsoft Planetary Computer STAC API for a recent, low-cloud Sentinel-2 L2A
+scene covering the plantation, then reads ONLY the pixels inside the plantation footprint
+from the Red (B04) and Near-Infrared (B08) bands and computes
+
+    NDVI = (NIR - Red) / (NIR + Red)
+
+Honesty rules (these are deliberate and covered by tests):
+  * NDVI statistics are only ever produced from real band pixels.
+  * If the service is disabled, unreachable, finds no scene, or band pixels cannot be
+    read, the result is ``available=False`` with a reason. No simulated or "derived"
+    values are substituted, and nothing is labelled as real satellite data unless pixels
+    were actually read.
+"""
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Tuple
-import requests
+import math
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
-from PIL import Image
-import io
+import requests
 
 from ...config import settings
 
 logger = logging.getLogger(__name__)
 
+NDVI_FORMULA = "NDVI = (NIR [B08] - Red [B04]) / (NIR [B08] + Red [B04])"
+COLLECTION = "sentinel-2-l2a"
+# Sentinel-2 processing baseline 04.00+ (Jan 2022 onward) adds a -1000 DN offset to L2A reflectance.
+BOA_ADD_OFFSET = -1000.0
+QUANTIFICATION_VALUE = 10000.0
+
+
+def unavailable(reason: str, bbox: Optional[List[float]] = None) -> Dict[str, Any]:
+    return {
+        "available": False,
+        "reason": reason,
+        "bounding_box": bbox,
+        "formula": NDVI_FORMULA,
+    }
+
+
+def footprint_bbox(latitude: float, longitude: float, area_hectares: Optional[float]) -> List[float]:
+    """[min_lon, min_lat, max_lon, max_lat] of a square with the plantation's area, centred on it.
+
+    The backend stores the plantation centroid and area (not the drawn polygon), so the
+    footprint is approximated as a square of equal area. A minimum 20 m x 20 m box keeps at
+    least a few 10 m pixels inside the window for very small plots.
+    """
+    area_m2 = max((area_hectares or 0.0) * 10_000.0, 400.0)
+    half_side_m = math.sqrt(area_m2) / 2.0
+    dlat = half_side_m / 111_320.0
+    dlon = half_side_m / (111_320.0 * max(math.cos(math.radians(latitude)), 1e-6))
+    return [longitude - dlon, latitude - dlat, longitude + dlon, latitude + dlat]
+
+
+def dn_to_reflectance(dn: np.ndarray, processing_baseline: Optional[str]) -> np.ndarray:
+    """Convert L2A digital numbers to surface reflectance; DN 0 is no-data (returned as NaN)."""
+    arr = dn.astype(np.float64)
+    offset = 0.0
+    try:
+        if processing_baseline and float(processing_baseline) >= 4.0:
+            offset = BOA_ADD_OFFSET
+    except ValueError:
+        pass
+    refl = (arr + offset) / QUANTIFICATION_VALUE
+    refl[arr == 0] = np.nan
+    return refl
+
+
+def compute_ndvi(red_refl: np.ndarray, nir_refl: np.ndarray) -> np.ndarray:
+    """Pixel-wise NDVI; invalid pixels (no-data or zero denominator) become NaN."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        denom = nir_refl + red_refl
+        ndvi = (nir_refl - red_refl) / denom
+    ndvi[~np.isfinite(ndvi)] = np.nan
+    return np.clip(ndvi, -1.0, 1.0)
+
+
+def summarize_ndvi(ndvi: np.ndarray) -> Optional[Dict[str, float]]:
+    valid = ndvi[np.isfinite(ndvi)]
+    if valid.size == 0:
+        return None
+    return {
+        "mean_ndvi": round(float(valid.mean()), 3),
+        "min_ndvi": round(float(valid.min()), 3),
+        "max_ndvi": round(float(valid.max()), 3),
+        # Share of footprint pixels with NDVI >= 0.40 (active photosynthetic canopy)
+        "vegetation_coverage_pct": round(float((valid >= 0.40).sum()) / valid.size * 100.0, 1),
+        "valid_pixel_count": int(valid.size),
+    }
+
+
 class SatelliteClient:
-    """
-    Sentinel-2 Satellite Client & Remote Sensing Engine.
-    
-    Interfaces with Sentinel-2 Level-2A STAC APIs (Copernicus / Planetary Computer)
-    to query multispectral satellite imagery for a given geographic polygon or coordinate.
-    
-    Extracts:
-      - Band 4: Red (665 nm)
-      - Band 8: Near-Infrared / NIR (842 nm)
-      
-    Computes:
-      NDVI = (NIR - Red) / (NIR + Red)
-      
-    Generates:
-      - Mean, Min, Max NDVI
-      - Canopy vegetation coverage percentage
-      - Acquisition timestamp & tile ID
-      - Explicit provenance indicator: 'REAL SATELLITE DATA' vs 'DEMO/PROTOTYPE DATA'
-    """
-
-    STAC_ENDPOINT = settings.SENTINEL_STAC_URL
-    REQUEST_TIMEOUT = 8  # Keep snappy for responsive web UX
-
-    @staticmethod
-    def get_bounding_box(
-        latitude: float,
-        longitude: float,
-        boundary_coords: Optional[List[List[float]]] = None,
-        padding_deg: float = 0.005
-    ) -> List[float]:
-        """
-        Derives [min_lon, min_lat, max_lon, max_lat] from polygon boundary or centroid.
-        """
-        if boundary_coords and len(boundary_coords) >= 3:
-            lats, lons = [], []
-            for pt in boundary_coords:
-                if isinstance(pt, dict):
-                    lat = pt.get("lat") if "lat" in pt else pt.get("latitude")
-                    lon = pt.get("lng") if "lng" in pt else (pt.get("lon") or pt.get("longitude"))
-                elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                    lat, lon = pt[0], pt[1]
-                else:
-                    lat, lon = None, None
-                if lat is not None and lon is not None:
-                    lats.append(float(lat))
-                    lons.append(float(lon))
-            if lats and lons:
-                min_lat, max_lat = min(lats) - 0.001, max(lats) + 0.001
-                min_lon, max_lon = min(lons) - 0.001, max(lons) + 0.001
-                return [min_lon, min_lat, max_lon, max_lat]
-        
-        # Centroid fallback box (~1km x 1km)
-        return [
-            longitude - padding_deg,
-            latitude - padding_deg,
-            longitude + padding_deg,
-            latitude + padding_deg
-        ]
 
     @classmethod
     def query_satellite_ndvi(
         cls,
         latitude: float,
         longitude: float,
-        boundary_coords: Optional[List[List[float]]] = None,
-        max_cloud_cover: float = 30.0
+        area_hectares: Optional[float] = None,
+        max_cloud_cover: float = 20.0,
+        lookback_days: int = 120,
     ) -> Dict[str, Any]:
-        """
-        Attempts to query real Sentinel-2 satellite data.
-        If network or credentials unavailable, falls back to deterministic simulation,
-        ALWAYS flagging whether data is REAL or PROTOTYPE.
-        """
-        bbox = cls.get_bounding_box(latitude, longitude, boundary_coords)
-        end_date = datetime.utcnow()
-        start_date = end_date - timedelta(days=90)
-        date_str = f"{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
+        bbox = footprint_bbox(latitude, longitude, area_hectares)
 
         if not settings.ENABLE_REAL_SATELLITE_QUERIES:
-            return cls._generate_prototype_fallback(
-                latitude, longitude, bbox, "Real satellite querying disabled in settings."
-            )
+            return unavailable("Satellite queries are disabled (ENABLE_REAL_SATELLITE_QUERIES=false).", bbox)
 
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=lookback_days)
+        payload = {
+            "bbox": bbox,
+            "datetime": f"{start:%Y-%m-%d}/{end:%Y-%m-%d}",
+            "collections": [COLLECTION],
+            "limit": 10,
+            "query": {"eo:cloud_cover": {"lt": max_cloud_cover}},
+            "sortby": [{"field": "properties.eo:cloud_cover", "direction": "asc"}],
+        }
         headers = {"Accept": "application/geo+json"}
         if settings.PLANETARY_COMPUTER_API_KEY:
             headers["Ocp-Apim-Subscription-Key"] = settings.PLANETARY_COMPUTER_API_KEY
 
-        payload = {
-            "bbox": bbox,
-            "datetime": date_str,
-            "collections": ["sentinel-2-l2a"],
-            "limit": 5,
-            "query": {
-                "eo:cloud_cover": {"lt": max_cloud_cover}
-            }
-        }
-
         try:
-            search_url = f"{cls.STAC_ENDPOINT}/search"
-            resp = requests.post(search_url, json=payload, headers=headers, timeout=cls.REQUEST_TIMEOUT)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                features = data.get("features", [])
-                if features:
-                    # Pick best scene with lowest cloud cover
-                    features.sort(key=lambda f: f.get("properties", {}).get("eo:cloud_cover", 100))
-                    best_scene = features[0]
-                    return cls._process_real_scene(best_scene, bbox, latitude, longitude)
+            resp = requests.post(
+                f"{settings.SENTINEL_STAC_URL}/search",
+                json=payload,
+                headers=headers,
+                timeout=settings.SATELLITE_REQUEST_TIMEOUT_S,
+            )
+        except requests.RequestException as exc:
+            return unavailable(f"Satellite catalogue unreachable: {exc.__class__.__name__}.", bbox)
 
-            # If no scene or non-200, fallback honestly
-            reason = f"No cloud-free Sentinel-2 scenes found in last 90 days (STAC status {resp.status_code})."
-            return cls._generate_prototype_fallback(latitude, longitude, bbox, reason)
+        if resp.status_code != 200:
+            return unavailable(f"Satellite catalogue returned HTTP {resp.status_code}.", bbox)
 
-        except Exception as e:
-            logger.warning(f"Satellite STAC query failed: {e}. Falling back to simulation.")
-            return cls._generate_prototype_fallback(
-                latitude, longitude, bbox, f"External satellite network query timed out or unreachable: {str(e)}"
+        features = resp.json().get("features", [])
+        if not features:
+            return unavailable(
+                f"No Sentinel-2 L2A scene with <{max_cloud_cover:.0f}% cloud cover in the last {lookback_days} days.",
+                bbox,
             )
 
+        features.sort(key=lambda f: f.get("properties", {}).get("eo:cloud_cover", 100.0))
+        last_reason = "No scene could be read."
+        for scene in features[:3]:
+            result, last_reason = cls._ndvi_from_scene(scene, bbox)
+            if result is not None:
+                return result
+        return unavailable(f"Sentinel-2 scenes found but band pixels could not be read: {last_reason}", bbox)
+
     @classmethod
-    def _process_real_scene(
-        cls,
-        scene: Dict[str, Any],
-        bbox: List[float],
-        latitude: float,
-        longitude: float
-    ) -> Dict[str, Any]:
-        """
-        Processes real Sentinel-2 scene assets (B04 Red, B08 NIR) or visual bands to calculate NDVI.
-        """
+    def _sign_href(cls, href: str) -> Optional[str]:
+        """Append a short-lived Planetary Computer SAS token to a blob URL."""
+        try:
+            headers = {}
+            if settings.PLANETARY_COMPUTER_API_KEY:
+                headers["Ocp-Apim-Subscription-Key"] = settings.PLANETARY_COMPUTER_API_KEY
+            resp = requests.get(
+                f"{settings.PLANETARY_COMPUTER_SAS_URL}/{COLLECTION}",
+                headers=headers,
+                timeout=settings.SATELLITE_REQUEST_TIMEOUT_S,
+            )
+            if resp.status_code != 200:
+                return None
+            token = resp.json().get("token")
+            if not token:
+                return None
+            sep = "&" if "?" in href else "?"
+            return f"{href}{sep}{token}"
+        except requests.RequestException:
+            return None
+
+    @classmethod
+    def _read_band_window(cls, href: str, bbox: List[float]) -> np.ndarray:
+        import rasterio
+        from rasterio.warp import transform_bounds
+        from rasterio.windows import from_bounds
+
+        with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", GDAL_HTTP_TIMEOUT=str(int(settings.SATELLITE_REQUEST_TIMEOUT_S))):
+            with rasterio.open(href) as src:
+                bounds = transform_bounds("EPSG:4326", src.crs, *bbox)
+                window = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
+                if window.width < 1 or window.height < 1:
+                    window = window.__class__(window.col_off, window.row_off, max(1, window.width), max(1, window.height))
+                return src.read(1, window=window, boundless=True, fill_value=0)
+
+    @classmethod
+    def _ndvi_from_scene(cls, scene: Dict[str, Any], bbox: List[float]) -> Tuple[Optional[Dict[str, Any]], str]:
+        try:
+            import rasterio  # noqa: F401
+        except ImportError:
+            return None, "rasterio is not installed on the backend (pip install rasterio)."
+
         props = scene.get("properties", {})
         assets = scene.get("assets", {})
-        scene_id = scene.get("id", "SENTINEL2-L2A")
-        acq_date = props.get("datetime", datetime.utcnow().isoformat())
-        platform = props.get("platform", "Sentinel-2A")
-        cloud_cover = round(props.get("eo:cloud_cover", 0.0), 2)
+        red_asset = assets.get("B04") or assets.get("red")
+        nir_asset = assets.get("B08") or assets.get("nir")
+        if not red_asset or not nir_asset:
+            return None, "Scene has no B04/B08 assets."
 
-        # Retrieve Red & NIR band asset URLs
-        b04_asset = assets.get("B04") or assets.get("red")
-        b08_asset = assets.get("B08") or assets.get("nir")
+        red_href = cls._sign_href(red_asset["href"])
+        nir_href = cls._sign_href(nir_asset["href"])
+        if not red_href or not nir_href:
+            return None, "Could not obtain a Planetary Computer access token for band files."
 
-        red_href = b04_asset.get("href") if b04_asset else None
-        nir_href = b08_asset.get("href") if b08_asset else None
-
-        # If direct band download is available, sample real reflectance
-        if red_href and nir_href:
-            try:
-                ndvi_array = cls._fetch_and_compute_raster_ndvi(red_href, nir_href)
-                if ndvi_array is not None:
-                    return cls._format_ndvi_statistics(
-                        ndvi_array=ndvi_array,
-                        is_real=True,
-                        source_label=f"REAL SATELLITE DATA ({platform} L2A - {scene_id})",
-                        acq_date=acq_date,
-                        cloud_cover=cloud_cover,
-                        bbox=bbox,
-                        latitude=latitude,
-                        longitude=longitude
-                    )
-            except Exception as e:
-                logger.warning(f"Raster band processing error: {e}")
-
-        # If direct raw band download requires cloud SAS tokens or is restricted,
-        # derive from Sentinel-2 L2A STAC surface reflectance telemetry
-        geo_seed = (abs(latitude * 11.13) + abs(longitude * 7.42)) % 1.0
-        synthetic_grid = np.clip(np.random.normal(0.68 + (geo_seed * 0.12), 0.08, (50, 50)), -0.1, 0.95)
-        
-        return cls._format_ndvi_statistics(
-            ndvi_array=synthetic_grid,
-            is_real=True,
-            source_label=f"REAL SATELLITE DATA ({platform} L2A - {scene_id})",
-            acq_date=acq_date,
-            cloud_cover=cloud_cover,
-            bbox=bbox,
-            latitude=latitude,
-            longitude=longitude,
-            note="Derived from Sentinel-2 L2A STAC surface reflectance telemetry."
-        )
-
-    @staticmethod
-    def _fetch_and_compute_raster_ndvi(red_url: str, nir_url: str) -> Optional[np.ndarray]:
-        """
-        Downloads small window/overview of B04 and B08, applies formula:
-        NDVI = (NIR - Red) / (NIR + Red)
-        """
         try:
-            r_resp = requests.get(red_url, timeout=5, stream=True)
-            n_resp = requests.get(nir_url, timeout=5, stream=True)
-            if r_resp.status_code == 200 and n_resp.status_code == 200:
-                red_img = Image.open(io.BytesIO(r_resp.content)).convert("F")
-                nir_img = Image.open(io.BytesIO(n_resp.content)).convert("F")
-                red_arr = np.array(red_img, dtype=np.float32)
-                nir_arr = np.array(nir_img, dtype=np.float32)
-                
-                # Avoid divide by zero
-                denom = nir_arr + red_arr
-                denom[denom == 0] = 1e-6
-                ndvi = (nir_arr - red_arr) / denom
-                return np.clip(ndvi, -1.0, 1.0)
-        except Exception:
-            return None
-        return None
+            red_dn = cls._read_band_window(red_href, bbox)
+            nir_dn = cls._read_band_window(nir_href, bbox)
+        except Exception as exc:  # rasterio/GDAL raise a variety of IO errors
+            logger.warning("Band read failed for %s: %s", scene.get("id"), exc)
+            return None, f"Band read failed ({exc.__class__.__name__})."
 
-    @classmethod
-    def _format_ndvi_statistics(
-        cls,
-        ndvi_array: np.ndarray,
-        is_real: bool,
-        source_label: str,
-        acq_date: str,
-        cloud_cover: float,
-        bbox: List[float],
-        latitude: float,
-        longitude: float,
-        note: str = ""
-    ) -> Dict[str, Any]:
-        """
-        Aggregates NDVI statistics and assigns normalized 0-100 verification score.
-        """
-        mean_ndvi = float(np.mean(ndvi_array))
-        min_ndvi = float(np.min(ndvi_array))
-        max_ndvi = float(np.max(ndvi_array))
-        
-        # Vegetation coverage: fraction of plot area where NDVI >= 0.40 (active photosynthetic canopy)
-        veg_coverage = float(np.sum(ndvi_array >= 0.40) / max(1, ndvi_array.size) * 100.0)
+        if red_dn.shape != nir_dn.shape:
+            return None, "Red and NIR windows have different shapes."
 
-        # Assign 0-100 Modality Score:
-        # NDVI < 0.30 -> Poor (Score < 40)
-        # NDVI 0.30-0.50 -> Moderate (Score 40-65)
-        # NDVI 0.50-0.70 -> Good (Score 65-80)
-        # NDVI > 0.70 -> Vigorous/Excellent (Score 80-100)
-        if mean_ndvi >= 0.70:
-            ndvi_score = 80.0 + min(20.0, ((mean_ndvi - 0.70) / 0.22) * 20.0)
-            status = "Healthy High-Density Canopy"
-        elif mean_ndvi >= 0.50:
-            ndvi_score = 65.0 + ((mean_ndvi - 0.50) / 0.20) * 15.0
-            status = "Moderate Vegetation Cover"
-        elif mean_ndvi >= 0.35:
-            ndvi_score = 45.0 + ((mean_ndvi - 0.35) / 0.15) * 20.0
-            status = "Sparse / Developing Vegetation"
-        else:
-            ndvi_score = max(10.0, (max(0.0, mean_ndvi) / 0.35) * 45.0)
-            status = "Degraded / Low Vegetation Index"
+        baseline = props.get("s2:processing_baseline")
+        ndvi = compute_ndvi(dn_to_reflectance(red_dn, baseline), dn_to_reflectance(nir_dn, baseline))
+        stats = summarize_ndvi(ndvi)
+        if stats is None:
+            return None, "All pixels in the plantation footprint are no-data."
 
+        platform = props.get("platform", "Sentinel-2")
+        scene_id = scene.get("id", "unknown-scene")
+        acquired = (props.get("datetime") or "")[:10] or None
         return {
-            "mean_ndvi": round(mean_ndvi, 3),
-            "min_ndvi": round(min_ndvi, 3),
-            "max_ndvi": round(max_ndvi, 3),
-            "vegetation_coverage_pct": round(veg_coverage, 1),
-            "ndvi_score": round(max(0.0, min(100.0, ndvi_score)), 1),
-            "vegetation_status": status,
-            "is_real_satellite": is_real,
-            "data_source": source_label,
-            "provenance_type": "REAL SATELLITE DATA" if is_real else "DEMO/PROTOTYPE DATA",
-            "acquisition_date": acq_date[:10] if acq_date else datetime.utcnow().strftime("%Y-%m-%d"),
-            "cloud_cover_pct": cloud_cover,
+            "available": True,
+            **stats,
+            "source_label": f"Sentinel-2 L2A ({platform}) scene {scene_id}",
+            "scene_id": scene_id,
+            "acquisition_date": acquired,
+            "cloud_cover_pct": props.get("eo:cloud_cover"),
+            "processing_baseline": baseline,
             "bounding_box": bbox,
-            "centroid": {"latitude": latitude, "longitude": longitude},
-            "formula": "NDVI = (NIR [Band 8] - Red [Band 4]) / (NIR [Band 8] + Red [Band 4])",
-            "note": note
-        }
-
-    @classmethod
-    def _generate_prototype_fallback(
-        cls,
-        latitude: float,
-        longitude: float,
-        bbox: List[float],
-        reason: str
-    ) -> Dict[str, Any]:
-        """
-        Transparent fallback when live satellite imagery cannot be acquired.
-        NEVER claims to be real satellite data.
-        """
-        geo_seed = (abs(latitude * 11.13) + abs(longitude * 7.42)) % 1.0
-        base_ndvi = 0.58 + (geo_seed * 0.18)
-        
-        # Deterministic simulation matrix based on coordinates
-        np.random.seed(int(geo_seed * 10000))
-        sim_grid = np.clip(np.random.normal(base_ndvi, 0.05, (30, 30)), 0.2, 0.9)
-        
-        res = cls._format_ndvi_statistics(
-            ndvi_array=sim_grid,
-            is_real=False,
-            source_label="DEMO/PROTOTYPE SIMULATION DATA (Sentinel-2 Agroforestry Simulator)",
-            acq_date=datetime.utcnow().strftime("%Y-%m-%d"),
-            cloud_cover=5.0,
-            bbox=bbox,
-            latitude=latitude,
-            longitude=longitude,
-            note=reason
-        )
-        return res
+            "formula": NDVI_FORMULA,
+        }, ""

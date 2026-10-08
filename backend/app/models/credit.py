@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, CheckConstraint
 from sqlalchemy.orm import relationship
 from ..database import Base
 
@@ -12,9 +12,13 @@ class CreditStatus(str, enum.Enum):
 
 class Credit(Base):
     __tablename__ = "credits"
+    __table_args__ = (
+        CheckConstraint("carbon_quantity_tco2e > 0", name="ck_credit_quantity_positive"),
+        CheckConstraint("price_per_tco2e > 0", name="ck_credit_price_positive"),
+    )
 
     id = Column(String, primary_key=True, index=True)  # e.g., CC-2026-001
-    plantation_id = Column(Integer, ForeignKey("plantations.id"), nullable=False)
+    plantation_id = Column(Integer, ForeignKey("plantations.id"), nullable=False, unique=True)
     verification_id = Column(String, ForeignKey("verifications.id"), nullable=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
@@ -31,8 +35,10 @@ class Credit(Base):
     # Blockchain audit layer (Ethereum-compatible)
     blockchain_tx_hash = Column(String, nullable=True)
     blockchain_contract_address = Column(String, nullable=True)
-    blockchain_status = Column(String, nullable=True, default="RECORDED")
+    # CONFIRMED (mined on the configured chain) | NOT_RECORDED (chain unavailable) | FAILED
+    blockchain_status = Column(String, nullable=True)
     report_hash = Column(String, nullable=True)
+    retirement_tx_hash = Column(String, nullable=True)  # Set only if the retirement was mined on-chain
     is_retired = Column(Integer, nullable=False, default=0)
     retired_at = Column(DateTime, nullable=True)
 

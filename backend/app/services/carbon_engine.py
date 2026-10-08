@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 from ..config import settings
@@ -7,6 +8,10 @@ from ..models.verification import Verification, VerificationDecision
 from ..models.credit import Credit, CreditStatus
 from ..models.audit_log import AuditLog
 from .blockchain_service import BlockchainService
+
+class CreditIssuanceError(Exception):
+    """Raised when a credit cannot be issued; the message is safe to show to API clients."""
+
 
 class CarbonEngine:
     """
@@ -68,7 +73,7 @@ class CarbonEngine:
         base_carbon = (plantation.tree_count or 0) * rate
         adjusted_carbon = round(base_carbon * species_factor * practice_factor, 1)
         
-        # Check verification eligibility
+        # Eligibility is decided by the latest verification (see issue_credit_for_plantation)
         is_approved = (plantation.status == PlantationStatus.VERIFIED.value)
         
         assumptions = (
@@ -101,34 +106,53 @@ class CarbonEngine:
         issuer_user_id: Optional[int] = None,
         issuer_email: Optional[str] = None,
         issuer_role: Optional[str] = None
-    ) -> Optional[Credit]:
+    ) -> Credit:
         """
-        Idempotently mints a Carbon Credit asset and registers it on-chain for an APPROVED plantation.
-        Ensures the asset is persisted in the database with status 'AVAILABLE'.
-        """
-        # Guard: Only APPROVED verifications can be minted
-        if not verification or verification.decision != VerificationDecision.APPROVED.value:
-            return None
+        Idempotently mints the carbon credit lot for a plantation.
 
-        # Check if already minted
+        Raises CreditIssuanceError unless ALL of the following hold:
+          * the given verification is the plantation's latest verification,
+          * its decision is APPROVED and it has a computed overall score,
+          * the plantation status is VERIFIED,
+          * the estimated quantity is greater than zero.
+        """
+        if verification is None or verification.plantation_id != plantation.id:
+            raise CreditIssuanceError("A verification record for this plantation is required.")
+        if verification.decision != VerificationDecision.APPROVED.value:
+            raise CreditIssuanceError(f"Verification decision is {verification.decision}; only APPROVED verifications can issue credits.")
+        if verification.overall_score is None:
+            raise CreditIssuanceError("Verification has no computed score; credits cannot be issued.")
+        if plantation.status != PlantationStatus.VERIFIED.value:
+            raise CreditIssuanceError(f"Plantation status is {plantation.status}; it must be VERIFIED.")
+        latest = (
+            db.query(Verification)
+            .filter(Verification.plantation_id == plantation.id)
+            .order_by(Verification.verified_at.desc())
+            .first()
+        )
+        if latest is None or latest.id != verification.id:
+            raise CreditIssuanceError("Only the latest verification of a plantation can issue credits.")
+
         existing = db.query(Credit).filter(Credit.plantation_id == plantation.id).first()
         if existing:
             return existing
 
         estimate = cls.calculate_estimate(plantation)
         carbon_qty = estimate["estimated_carbon_tco2e"]
-        if carbon_qty <= 0:
-            carbon_qty = max(1.0, round((plantation.tree_count or 100) * 0.05, 1))
+        if carbon_qty is None or carbon_qty <= 0:
+            raise CreditIssuanceError("Estimated sequestration is zero; no credits can be issued.")
+        price = price_per_tco2e if price_per_tco2e is not None else settings.BASE_CREDIT_PRICE_INR
+        if price <= 0:
+            raise CreditIssuanceError("Price per tCO2e must be greater than zero.")
 
-        credit_id = f"CC-2026-{uuid.uuid4().hex[:5].upper()}"
-
-        # On-Chain registration
+        credit_id = f"CC-{datetime.utcnow():%Y}-{uuid.uuid4().hex[:6].upper()}"
         report_hash = BlockchainService.compute_report_hash(verification)
         bc_res = BlockchainService.register_credit_on_chain(
             credit_id=credit_id,
             plantation_id=plantation.id,
             carbon_quantity_tco2e=carbon_qty,
-            report_hash=report_hash
+            report_hash=report_hash,
+            owner_user_id=plantation.farmer_id,
         )
 
         credit = Credit(
@@ -137,30 +161,35 @@ class CarbonEngine:
             verification_id=verification.id,
             owner_id=plantation.farmer_id,
             carbon_quantity_tco2e=carbon_qty,
-            price_per_tco2e=price_per_tco2e or settings.BASE_CREDIT_PRICE_INR,
+            price_per_tco2e=price,
             currency="INR",
             status=CreditStatus.AVAILABLE.value,
-            tree_count=plantation.tree_count or 0,
+            tree_count=plantation.tree_count,
             sequestration_rate=estimate["sequestration_rate_per_tree"],
             estimation_notes=estimate["assumptions_summary"],
             blockchain_tx_hash=bc_res.get("tx_hash"),
             blockchain_contract_address=bc_res.get("contract_address"),
-            blockchain_status=bc_res.get("status", "CONFIRMED"),
+            blockchain_status=bc_res["status"],
             report_hash=report_hash,
             is_retired=0
         )
         db.add(credit)
-
-        audit = AuditLog(
-            user_id=issuer_user_id or plantation.farmer_id,
-            user_email=issuer_email or "system@agrocarbon.demo",
+        chain_note = (
+            f"On-chain tx {bc_res['tx_hash']}." if bc_res["status"] == "CONFIRMED"
+            else f"Not recorded on-chain ({bc_res.get('reason')})."
+        )
+        db.add(AuditLog(
+            user_id=issuer_user_id,
+            user_email=issuer_email or "system",
             user_role=issuer_role or "SYSTEM",
             action="CARBON_CREDIT_ISSUED",
             target_type="Credit",
             target_id=credit.id,
-            details=f"Issued {carbon_qty} tCO2e carbon credit ({credit.id}) for verified plantation #{plantation.id} ('{plantation.name}'). Status: AVAILABLE."
-        )
-        db.add(audit)
+            details=(
+                f"Issued {carbon_qty} tCO2e ({credit.id}) for plantation #{plantation.id} from APPROVED "
+                f"verification {verification.id} (score {verification.overall_score}). {chain_note}"
+            ),
+        ))
         db.commit()
         db.refresh(credit)
         return credit

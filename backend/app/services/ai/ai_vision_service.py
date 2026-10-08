@@ -1,180 +1,230 @@
-import os
+"""
+Ground-photo classifier (MobileNetV3-Small, 3 classes).
+
+Model contract (must match ml/train.py):
+  input   : one RGB image, resized to 224x224, ImageNet mean/std normalisation
+  output  : softmax over {non_plantation, plantation, unclear_evidence}
+
+IMPORTANT LIMITATION: the shipped weights were trained and validated only on the
+procedurally generated synthetic images produced by ml/prepare_dataset.py. The
+validation accuracy recorded in model_metadata.json is therefore accuracy on synthetic
+data, NOT on real field photographs. No real-world validation has been performed.
+
+Failure policy: if the model is missing, the image is invalid, or inference fails, this
+service returns ``available=False`` with a reason and null scores. It never substitutes a
+default score.
+"""
+import json
 import logging
-from typing import Dict, Any, Optional
-from PIL import Image
-import torch
-import torch.nn as nn
-from torchvision import transforms, models
+import os
+from typing import Any, Dict, Optional, Tuple
+
+from PIL import Image, UnidentifiedImageError
 
 from ...config import settings
 
 logger = logging.getLogger(__name__)
 
+EXPECTED_CLASSES = ("non_plantation", "plantation", "unclear_evidence")
+ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "TIFF", "MPO"}
+MIN_IMAGE_SIDE_PX = 64
+MAX_IMAGE_PIXELS = 50_000_000
+INPUT_SIZE = (224, 224)
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+
+def validate_image_file(image_path: Optional[str]) -> Tuple[bool, str, Dict[str, Any]]:
+    """Checks that a file is a decodable photo the model can accept. Returns (ok, reason, info)."""
+    if not image_path:
+        return False, "No ground photograph provided.", {}
+    if not os.path.isfile(image_path):
+        return False, "Ground photograph file not found on server.", {}
+    size = os.path.getsize(image_path)
+    if size == 0:
+        return False, "Ground photograph file is empty.", {}
+    if size > settings.MAX_UPLOAD_BYTES:
+        return False, f"Ground photograph exceeds {settings.MAX_UPLOAD_BYTES // (1024 * 1024)} MB.", {}
+    try:
+        with Image.open(image_path) as img:
+            img.verify()
+        with Image.open(image_path) as img:
+            fmt = img.format
+            width, height = img.size
+            img.convert("RGB").load()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        return False, f"Ground photograph could not be decoded ({exc.__class__.__name__}).", {}
+    if fmt not in ALLOWED_IMAGE_FORMATS:
+        return False, f"Unsupported image format '{fmt}'.", {}
+    if min(width, height) < MIN_IMAGE_SIDE_PX:
+        return False, f"Ground photograph is too small ({width}x{height}); minimum side is {MIN_IMAGE_SIDE_PX}px.", {}
+    if width * height > MAX_IMAGE_PIXELS:
+        return False, f"Ground photograph is too large ({width}x{height}).", {}
+    return True, "", {"format": fmt, "width": width, "height": height, "bytes": size}
+
+
+def _load_metadata() -> Dict[str, Any]:
+    try:
+        with open(settings.ML_METADATA_PATH, "r") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 class AIVisionService:
-    """
-    Production AI Image Verification Service.
-    
-    Runs deep learning inference on farmer ground plantation photography using a
-    fine-tuned MobileNetV3-Small neural network.
-    
-    Outputs:
-      - Predicted Class ('Plantation', 'Non-Plantation', 'Unclear / Poor Evidence')
-      - Confidence Score (0.0% to 100.0%)
-      - Class probability distribution
-      - Model metadata and provenance
-    """
-    
     _model = None
     _device = None
-    _class_to_idx = None
-    _idx_to_class = None
-    
+    _idx_to_class: Optional[Dict[int, str]] = None
+    _load_error: Optional[str] = None
+    _metadata: Dict[str, Any] = {}
+
     CLASS_DISPLAY_NAMES = {
         "plantation": "Plantation / Agroforestry",
-        "non_plantation": "Non-Plantation (Urban/Barren/Manmade)",
-        "unclear_evidence": "Unclear / Poor Evidence (Blur/Dark/Obstructed)"
+        "non_plantation": "Non-Plantation (Urban/Barren/Man-made)",
+        "unclear_evidence": "Unclear / Poor Evidence (Blur/Dark/Obstructed)",
     }
-    
-    TRANSFORM = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+
+    @classmethod
+    def model_info(cls) -> Dict[str, Any]:
+        meta = cls._metadata or _load_metadata()
+        return {
+            "model_name": meta.get("model_name", "MobileNetV3-Small-Agroforestry"),
+            "model_version": meta.get("model_version", "unknown"),
+            "training_data": meta.get(
+                "training_data",
+                "Procedurally generated synthetic images (ml/prepare_dataset.py); no real-world validation.",
+            ),
+        }
 
     @classmethod
     def load_model(cls):
-        """Loads and caches the fine-tuned PyTorch model into memory."""
         if cls._model is not None:
             return cls._model
-            
-        cls._device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        weights_path = settings.ML_MODEL_PATH
-        
-        if not os.path.exists(weights_path):
-            logger.warning(f"ML model weights not found at {weights_path}. Model must be trained.")
-            return None
-            
+        cls._load_error = None
+        cls._metadata = _load_metadata()
+
         try:
-            checkpoint = torch.load(weights_path, map_location=cls._device)
-            cls._class_to_idx = checkpoint.get("class_to_idx", {
-                "non_plantation": 0,
-                "plantation": 1,
-                "unclear_evidence": 2
-            })
-            cls._idx_to_class = {v: k for k, v in cls._class_to_idx.items()}
-            
+            import torch
+            import torch.nn as nn
+            from torchvision import models
+        except ImportError as exc:
+            cls._load_error = f"PyTorch/torchvision not installed ({exc})."
+            return None
+
+        if not os.path.exists(settings.ML_MODEL_PATH):
+            cls._load_error = f"Model weights not found at {settings.ML_MODEL_PATH}."
+            return None
+
+        try:
+            cls._device = torch.device("cpu")
+            checkpoint = torch.load(settings.ML_MODEL_PATH, map_location=cls._device)
+            class_to_idx = checkpoint.get("class_to_idx")
+            if not class_to_idx or set(class_to_idx) != set(EXPECTED_CLASSES):
+                cls._load_error = f"Checkpoint classes {class_to_idx} do not match expected {EXPECTED_CLASSES}."
+                return None
+            meta_classes = cls._metadata.get("class_to_idx")
+            if meta_classes and meta_classes != class_to_idx:
+                cls._load_error = "Checkpoint class mapping disagrees with model_metadata.json."
+                return None
+
             model = models.mobilenet_v3_small(weights=None)
-            in_features = model.classifier[3].in_features
-            model.classifier[3] = nn.Linear(in_features, len(cls._class_to_idx))
+            model.classifier[3] = nn.Linear(model.classifier[3].in_features, len(class_to_idx))
             model.load_state_dict(checkpoint["model_state_dict"])
             model.to(cls._device)
             model.eval()
-            
+
+            cls._idx_to_class = {v: k for k, v in class_to_idx.items()}
             cls._model = model
-            logger.info(f"AI Vision Model loaded successfully on {cls._device}")
-            return cls._model
-        except Exception as e:
-            logger.error(f"Failed to load AI vision weights: {e}")
+            return model
+        except Exception as exc:  # corrupt checkpoint, shape mismatch, etc.
+            cls._load_error = f"Failed to load model weights ({exc.__class__.__name__}: {exc})."
+            logger.error(cls._load_error)
             return None
+
+    @staticmethod
+    def _unavailable(reason: str, **extra: Any) -> Dict[str, Any]:
+        return {
+            "available": False,
+            "reason": reason,
+            "predicted_class": None,
+            "prediction_label": None,
+            "confidence_pct": None,
+            "class_probabilities": {},
+            "cv_score": None,
+            "cv_status": "NOT AVAILABLE",
+            **AIVisionService.model_info(),
+            **extra,
+        }
+
+    @staticmethod
+    def score_from_prediction(pred_key: str, confidence: float) -> Tuple[float, str, str]:
+        """Deterministic, documented mapping from (class, confidence%) to the 0-100 CV score."""
+        if pred_key == "plantation":
+            return (
+                round(70.0 + (confidence / 100.0) * 28.0, 1),
+                f"Plantation canopy detected ({confidence}% confidence)",
+                "Classifier assigned the highest probability to the plantation/agroforestry class.",
+            )
+        if pred_key == "non_plantation":
+            return (
+                round(max(10.0, 40.0 - (confidence / 100.0) * 25.0), 1),
+                f"Non-plantation scene detected ({confidence}% confidence)",
+                "Classifier assigned the highest probability to urban/barren/man-made surfaces.",
+            )
+        return (
+            round(max(15.0, 35.0 - (confidence / 100.0) * 15.0), 1),
+            f"Unclear / poor image evidence ({confidence}% confidence)",
+            "Classifier judged the photo too blurred, dark or obstructed to assess.",
+        )
 
     @classmethod
     def verify_image(cls, image_path: Optional[str]) -> Dict[str, Any]:
-        """
-        Executes real AI inference on the submitted plantation ground evidence image.
-        """
-        if not image_path or not os.path.exists(image_path):
-            return {
-                "is_provided": False,
-                "predicted_class": "NO EVIDENCE SUBMITTED",
-                "prediction_label": "No Image Provided",
-                "confidence_pct": 0.0,
-                "class_probabilities": {},
-                "model_name": "MobileNetV3-Plantation-v1",
-                "model_version": "1.0.0",
-                "is_trained": True,
-                "feature_evidence": "Ground photograph not uploaded by farmer.",
-                "cv_score": 0.0,
-                "cv_status": "NOT PROVIDED"
-            }
+        ok, reason, info = validate_image_file(image_path)
+        if not ok:
+            return cls._unavailable(reason)
 
         model = cls.load_model()
         if model is None:
-            # Honest notification: model weights missing
-            return {
-                "is_provided": True,
-                "predicted_class": "MODEL_UNAVAILABLE",
-                "prediction_label": "Model Weights Missing",
-                "confidence_pct": 0.0,
-                "class_probabilities": {},
-                "model_name": "MobileNetV3-Plantation-v1",
-                "model_version": "1.0.0",
-                "is_trained": False,
-                "feature_evidence": "Neural network model weights file not found on server.",
-                "cv_score": 50.0,
-                "cv_status": "ML Model Offline"
-            }
+            return cls._unavailable(f"ML model unavailable: {cls._load_error}")
 
         try:
-            with Image.open(image_path) as pil_img:
-                img_rgb = pil_img.convert("RGB")
-                tensor = cls.TRANSFORM(img_rgb).unsqueeze(0).to(cls._device)
-                
-                with torch.no_grad():
-                    logits = model(tensor)
-                    probs = torch.softmax(logits, dim=1).squeeze(0)
-                    
-                top_prob, top_idx = probs.max(0)
-                pred_key = cls._idx_to_class[top_idx.item()]
-                confidence = round(top_prob.item() * 100.0, 1)
-                
-                prob_dict = {
-                    cls._idx_to_class[i]: round(probs[i].item() * 100.0, 1)
-                    for i in range(len(cls._idx_to_class))
-                }
-                
-                prediction_label = cls.CLASS_DISPLAY_NAMES.get(pred_key, pred_key)
-                
-                # Derive CV score for verification formula:
-                # If Plantation: score scales with confidence (75 - 98)
-                # If Non-Plantation or Unclear: score drops drastically (10 - 40)
-                if pred_key == "plantation":
-                    cv_score = round(70.0 + (confidence / 100.0) * 28.0, 1)
-                    cv_status = f"Plantation Canopy Confirmed ({confidence}% Confidence)"
-                    feature_notes = "Deep learning feature extractor identified characteristic agroforestry canopy structure and foliage texture."
-                elif pred_key == "non_plantation":
-                    cv_score = round(max(10.0, 40.0 - (confidence / 100.0) * 25.0), 1)
-                    cv_status = f"Non-Plantation Evidence Detected ({confidence}% Confidence)"
-                    feature_notes = "Classifier identified urban, architectural, or barren non-vegetative surfaces."
-                else:
-                    cv_score = round(max(15.0, 35.0 - (confidence / 100.0) * 15.0), 1)
-                    cv_status = f"Poor/Unclear Image Evidence ({confidence}% Confidence)"
-                    feature_notes = "Classifier detected severe motion blur, obstruction, or extreme exposure preventing feature extraction."
+            import torch
+            from torchvision import transforms
 
-                return {
-                    "is_provided": True,
-                    "predicted_class": pred_key,
-                    "prediction_label": prediction_label,
-                    "confidence_pct": confidence,
-                    "class_probabilities": prob_dict,
-                    "model_name": "MobileNetV3-Plantation-v1",
-                    "model_version": "1.0.0",
-                    "is_trained": True,
-                    "feature_evidence": feature_notes,
-                    "cv_score": cv_score,
-                    "cv_status": cv_status
-                }
-        except Exception as e:
-            logger.error(f"Inference error on {image_path}: {e}")
+            transform = transforms.Compose([
+                transforms.Resize(INPUT_SIZE),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ])
+            with Image.open(image_path) as pil_img:
+                tensor = transform(pil_img.convert("RGB")).unsqueeze(0).to(cls._device)
+            if tuple(tensor.shape) != (1, 3, *INPUT_SIZE):
+                return cls._unavailable(f"Unexpected model input shape {tuple(tensor.shape)}.")
+
+            with torch.no_grad():
+                probs = torch.softmax(model(tensor), dim=1).squeeze(0)
+            if not torch.isfinite(probs).all():
+                return cls._unavailable("Model produced non-finite probabilities.")
+
+            top_prob, top_idx = probs.max(0)
+            pred_key = cls._idx_to_class[int(top_idx.item())]
+            confidence = round(float(top_prob.item()) * 100.0, 1)
+            prob_dict = {cls._idx_to_class[i]: round(float(probs[i].item()) * 100.0, 1) for i in range(len(probs))}
+            cv_score, cv_status, notes = cls.score_from_prediction(pred_key, confidence)
+
             return {
-                "is_provided": True,
-                "predicted_class": "ERROR",
-                "prediction_label": f"Inference Error: {str(e)}",
-                "confidence_pct": 0.0,
-                "class_probabilities": {},
-                "model_name": "MobileNetV3-Plantation-v1",
-                "model_version": "1.0.0",
-                "is_trained": True,
-                "feature_evidence": f"Failed to process image format: {str(e)}",
-                "cv_score": 30.0,
-                "cv_status": "Processing Error"
+                "available": True,
+                "reason": None,
+                "predicted_class": pred_key,
+                "prediction_label": cls.CLASS_DISPLAY_NAMES.get(pred_key, pred_key),
+                "confidence_pct": confidence,
+                "class_probabilities": prob_dict,
+                "cv_score": cv_score,
+                "cv_status": cv_status,
+                "feature_evidence": notes,
+                "image_info": info,
+                **cls.model_info(),
             }
+        except Exception as exc:
+            logger.error("Inference error on %s: %s", image_path, exc)
+            return cls._unavailable(f"Inference failed ({exc.__class__.__name__}).")

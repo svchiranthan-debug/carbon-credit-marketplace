@@ -13,6 +13,9 @@
     "unclear_evidence": 2
   },
   "input_resolution": "224x224",
+  "preprocessing": "RGB, resize to 224x224, ToTensor, ImageNet mean/std normalisation",
+  "training_data": "Procedurally generated synthetic images from ml/prepare_dataset.py (40 train + 15 val per class). No real field photographs.",
+  "validation_note": "best_val_accuracy_pct is accuracy on the synthetic validation split only. No real-world validation has been performed; do not cite it as field accuracy.",
   "best_val_accuracy_pct": 100.0,
   "epochs_trained": 8,
   "training_device": "mps",

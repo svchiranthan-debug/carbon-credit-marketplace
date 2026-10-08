@@ -4,8 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
-from .database import engine, Base
-from .models import *  # Ensure all models are registered with Base
+from .database import init_db
 from .routers import (
     auth_router,
     users_router,
@@ -17,8 +16,8 @@ from .routers import (
     admin_router,
 )
 
-# Initialize database tables
-Base.metadata.create_all(bind=engine)
+# Create tables and add any columns missing from older SQLite databases (additive only)
+init_db()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -29,15 +28,13 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=False,  # bearer tokens, no cookies
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount uploads static directory
-if not os.path.exists(settings.UPLOAD_DIR):
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 # Include Routers
@@ -56,7 +53,7 @@ def root():
         "project": settings.PROJECT_NAME,
         "status": "online",
         "documentation": "/docs",
-        "architecture": "Multi-Modal AI Verification (NDVI 40% + CV 35% + SOC 25%)",
+        "verification_formula": "0.40 x NDVI + 0.35 x CV + 0.25 x SOC",
         "version": "1.0.0"
     }
 

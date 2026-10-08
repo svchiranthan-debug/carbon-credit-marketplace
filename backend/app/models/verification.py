@@ -14,7 +14,7 @@ class Verification(Base):
     __tablename__ = "verifications"
 
     id = Column(String, primary_key=True, index=True)  # e.g., VER-2026-001
-    plantation_id = Column(Integer, ForeignKey("plantations.id"), nullable=False)
+    plantation_id = Column(Integer, ForeignKey("plantations.id"), nullable=False, index=True)
     
     # Modality 1: Satellite / NDVI
     ndvi_value = Column(Float, nullable=True)  # Normalized Index (e.g., 0.76), null if pending
@@ -48,6 +48,16 @@ class Verification(Base):
     
     evidence_summary = Column(Text, nullable=True)
     limitations_disclaimer = Column(Text, nullable=True)
+    # Explainability & audit trail
+    decision_reasons = Column(JSON, nullable=True)   # Ordered list of human-readable reasons
+    evidence_snapshot = Column(JSON, nullable=True)  # Exact inputs the decision was computed from
+    evidence_status = Column(JSON, nullable=True)    # Per-modality status at the time of the run
+    missing_evidence = Column(JSON, nullable=True)   # Modalities missing/unavailable at the time of the run
+    ndvi_provenance = Column(String, nullable=True)  # SENTINEL2_COMPUTED | REPORTED | None (unavailable)
+    engine_decision = Column(String, nullable=True)  # Decision produced by the engine before any auditor override
+    decided_by = Column(String, nullable=True)       # "VERIFICATION_ENGINE" or the auditor's email
+    auditor_notes = Column(Text, nullable=True)
+
     # Modality 1: Satellite / NDVI Provenance
     is_real_satellite = Column(Boolean, default=False)
     satellite_source = Column(String, nullable=True)  # e.g. "REAL SATELLITE DATA (Sentinel-2 L2A)"
@@ -58,15 +68,15 @@ class Verification(Base):
     vegetation_coverage_pct = Column(Float, nullable=True)
 
     # Modality 2: Computer Vision & Deep Learning AI
-    ai_model_name = Column(String, default="MobileNetV3-Plantation-v1")
-    ai_model_version = Column(String, default="1.0.0")
+    ai_model_name = Column(String, nullable=True)
+    ai_model_version = Column(String, nullable=True)
     ai_predicted_class = Column(String, nullable=True)
     ai_confidence_pct = Column(Float, nullable=True)
     image_phash = Column(String, nullable=True)
 
     # Risk & Fraud Engine Assessment
-    risk_score = Column(Float, default=0.0)  # 0 to 100
-    risk_level = Column(String, default="LOW")  # LOW, MEDIUM, HIGH
+    risk_score = Column(Float, nullable=True)  # 0 to 100; null until all evidence is assessed
+    risk_level = Column(String, nullable=True)  # LOW, MEDIUM, HIGH; null until assessed
     risk_factors = Column(JSON, nullable=True)  # List of triggered factor strings
     risk_explanation = Column(Text, nullable=True)
     

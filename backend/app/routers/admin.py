@@ -1,10 +1,8 @@
-import os
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from ..config import settings
 from ..database import get_db
 from ..models.user import User, UserRole
 from ..models.plantation import Plantation, PlantationStatus
@@ -13,23 +11,13 @@ from ..models.credit import Credit, CreditStatus
 from ..models.transaction import Transaction
 from ..models.audit_log import AuditLog
 from ..schemas.schemas import AdminMetricsResponse, AdminDecisionRequest, VerificationResponse, AuditLogResponse
-from ..services.verification_engine import VerificationEngine
+from ..services.carbon_engine import CarbonEngine, CreditIssuanceError
+from ..services.verification_store import (
+    DECISION_TO_PLANTATION_STATUS, PreviewVerification, hydrate, latest_verification,
+)
 from ..core.security import get_current_user, require_role
 
 router = APIRouter(prefix="/admin", tags=["Admin Dashboard & Management"])
-
-def _hydrate_verification(v: Verification, db: Session) -> Verification:
-    p = db.query(Plantation).filter(Plantation.id == v.plantation_id).first()
-    if p:
-        v.plantation_name = p.name
-        v.farmer_name = p.farmer_name
-        v.location = p.location
-        v.area_hectares = p.area_hectares
-        v.image_url = p.image_url
-        audit = VerificationEngine.check_evidence_completeness(p)
-        v.evidence_status = audit["evidence_status"]
-        v.missing_evidence = audit["missing_modalities"]
-    return v
 
 @router.get("/metrics", response_model=AdminMetricsResponse)
 def get_admin_metrics(
@@ -73,74 +61,13 @@ def list_admin_verifications(
     current_user: User = Depends(require_role([UserRole.ADMIN.value, UserRole.AUDITOR.value])),
     db: Session = Depends(get_db)
 ):
-    # Ensure all plantations have a verification evaluation
-    all_plantations = db.query(Plantation).all()
-    for p in all_plantations:
-        existing = db.query(Verification).filter(Verification.plantation_id == p.id).first()
-        if not existing:
-            custom_image_path = None
-            if p.image_url:
-                filename = os.path.basename(p.image_url)
-                candidate = os.path.join(settings.UPLOAD_DIR, filename)
-                if os.path.exists(candidate):
-                    custom_image_path = candidate
-            res = VerificationEngine.run_verification(p, custom_image_path=custom_image_path, db=db)
-            ver = Verification(
-                id=res["id"],
-                plantation_id=p.id,
-                ndvi_value=res["ndvi_value"],
-                ndvi_score=res["ndvi_score"],
-                ndvi_status=res["ndvi_status"],
-                ndvi_historical_diff=res.get("ndvi_historical_diff"),
-                is_real_satellite=res.get("is_real_satellite", False),
-                satellite_source=res.get("satellite_source"),
-                acquisition_date=res.get("acquisition_date"),
-                mean_ndvi=res.get("mean_ndvi"),
-                min_ndvi=res.get("min_ndvi"),
-                max_ndvi=res.get("max_ndvi"),
-                vegetation_coverage_pct=res.get("vegetation_coverage_pct"),
-                image_quality_score=res["image_quality_score"],
-                vegetation_detection_score=res["vegetation_detection_score"],
-                cv_score=res["cv_score"],
-                cv_detection_status=res["cv_detection_status"],
-                ai_model_name=res.get("ai_model_name", "MobileNetV3-Plantation-v1"),
-                ai_model_version=res.get("ai_model_version", "1.0.0"),
-                ai_predicted_class=res.get("ai_predicted_class"),
-                ai_confidence_pct=res.get("ai_confidence_pct"),
-                image_phash=res.get("image_phash"),
-                soc_pct=res["soc_pct"],
-                soc_score=res["soc_score"],
-                soc_status=res["soc_status"],
-                ndvi_weight=res["ndvi_weight"],
-                cv_weight=res["cv_weight"],
-                soc_weight=res["soc_weight"],
-                ndvi_contribution=res["ndvi_contribution"],
-                cv_contribution=res["cv_contribution"],
-                soc_contribution=res["soc_contribution"],
-                overall_score=res["overall_score"],
-                decision=res["decision"],
-                risk_score=res.get("risk_score", 0.0),
-                risk_level=res.get("risk_level", "LOW"),
-                risk_factors=res.get("risk_factors", []),
-                risk_explanation=res.get("risk_explanation"),
-                evidence_summary=res["evidence_summary"],
-                limitations_disclaimer=res["limitations_disclaimer"],
-                verified_at=res["verified_at"]
-            )
-            db.add(ver)
-            db.commit()
+    """Latest verification per plantation. Plantations never verified appear as read-only PENDING previews."""
+    items = []
+    for p in db.query(Plantation).order_by(Plantation.created_at.desc()).all():
+        v = latest_verification(db, p.id)
+        items.append(hydrate(v, p) if v is not None else PreviewVerification(p))
+    return items
 
-    verifications = db.query(Verification).order_by(Verification.verified_at.desc()).all()
-    
-    # Return latest verification per plantation
-    seen_plantations = set()
-    latest = []
-    for v in verifications:
-        if v.plantation_id not in seen_plantations:
-            seen_plantations.add(v.plantation_id)
-            latest.append(_hydrate_verification(v, db))
-            
-    return latest
 
 @router.post("/verifications/{id}/decision", response_model=VerificationResponse)
 def update_verification_decision(
@@ -149,63 +76,75 @@ def update_verification_decision(
     current_user: User = Depends(require_role([UserRole.ADMIN.value, UserRole.AUDITOR.value])),
     db: Session = Depends(get_db)
 ):
+    """
+    Human auditor decision on a scored verification.
+
+    * Only the plantation's latest verification can be decided.
+    * APPROVED requires a fully scored verification (all three modality scores present).
+    * Changing the engine's decision requires notes (recorded in the audit log).
+    * Once credits are issued the decision is final.
+    """
     verification = db.query(Verification).filter(Verification.id == id).first()
     if not verification:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Verification record not found")
-        
-    valid_decisions = [d.value for d in VerificationDecision]
-    dec = decision_in.decision.upper()
-    if dec not in valid_decisions:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid decision '{decision_in.decision}'. Allowed: {valid_decisions}"
-        )
-        
-    old_decision = verification.decision
-    verification.decision = dec
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verification {id} not found")
     plantation = db.query(Plantation).filter(Plantation.id == verification.plantation_id).first()
-    if plantation:
-        if dec == VerificationDecision.APPROVED.value:
-            audit_result = VerificationEngine.check_evidence_completeness(plantation)
-            if not audit_result.get("is_complete"):
-                missing = audit_result.get("missing_modalities", [])
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cannot approve plantation with incomplete evidence. Missing modalities: {missing}"
-                )
-            plantation.status = PlantationStatus.VERIFIED.value
-        elif dec == VerificationDecision.REVIEW.value:
-            plantation.status = PlantationStatus.REVIEW.value
-        else:
-            plantation.status = PlantationStatus.REJECTED.value
-            
-    audit = AuditLog(
-        user_id=current_user.id,
-        user_email=current_user.email,
-        user_role=current_user.role,
-        action="ADMIN_DECISION_OVERRIDE",
-        target_type="Verification",
-        target_id=verification.id,
-        details=f"Auditor/Admin {current_user.email} changed decision from {old_decision} to {dec}. Notes: {decision_in.notes or 'None'}"
-    )
-    db.add(audit)
+    if plantation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plantation for this verification not found")
+
+    latest = latest_verification(db, plantation.id)
+    if latest.id != verification.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Verification {id} is superseded by {latest.id}; decide on the latest one.")
+    if db.query(Credit).filter(Credit.plantation_id == plantation.id).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Credits have already been issued for this plantation; the decision is final.")
+
+    dec = decision_in.decision
+    notes = (decision_in.notes or "").strip()
+    if dec == VerificationDecision.APPROVED.value:
+        missing = [name for name, val in (("NDVI", verification.ndvi_score), ("CV", verification.cv_score),
+                                          ("SOC", verification.soc_score)) if val is None]
+        if verification.overall_score is None or missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot approve: verification is not fully scored (missing {', '.join(missing) or 'overall score'}). "
+                       "Required evidence must be submitted and verification re-run first.",
+            )
+    engine_dec = verification.engine_decision or verification.decision
+    if dec != engine_dec and not notes:
+        raise HTTPException(status_code=422,
+                            detail=f"Notes are required when overriding the engine decision ({engine_dec}).")
+
+    old = verification.decision
+    if verification.engine_decision is None:
+        verification.engine_decision = old
+    verification.decision = dec
+    verification.decided_by = current_user.email
+    verification.auditor_notes = notes or None
+    verification.decision_reasons = (verification.decision_reasons or []) + [
+        f"Auditor {current_user.email} set decision {old} → {dec}" + (f": {notes}" if notes else ".")
+    ]
+    plantation.status = DECISION_TO_PLANTATION_STATUS[dec]
+    db.add(AuditLog(
+        user_id=current_user.id, user_email=current_user.email, user_role=current_user.role,
+        action="AUDITOR_DECISION", target_type="Verification", target_id=verification.id,
+        details=f"{current_user.email} changed decision {old} → {dec} (engine: {engine_dec}). Notes: {notes or 'none'}",
+    ))
     db.commit()
     db.refresh(verification)
-    
-    # Auto-issue verified carbon asset upon approval so it is immediately available in marketplace
-    if dec == VerificationDecision.APPROVED.value and plantation:
-        from ..services.carbon_engine import CarbonEngine
-        CarbonEngine.issue_credit_for_plantation(
-            plantation=plantation,
-            verification=verification,
-            db=db,
-            issuer_user_id=current_user.id,
-            issuer_email=current_user.email,
-            issuer_role=current_user.role
-        )
-    
-    return _hydrate_verification(verification, db)
+
+    if dec == VerificationDecision.APPROVED.value:
+        try:
+            CarbonEngine.issue_credit_for_plantation(
+                plantation=plantation, verification=verification, db=db,
+                issuer_user_id=current_user.id, issuer_email=current_user.email, issuer_role=current_user.role,
+            )
+        except CreditIssuanceError as exc:
+            verification.decision_reasons = (verification.decision_reasons or []) + [f"Credit issuance skipped: {exc}"]
+            db.commit()
+            db.refresh(verification)
+
+    return hydrate(verification, plantation)
 
 @router.get("/audit-logs", response_model=List[AuditLogResponse])
 def get_audit_logs(

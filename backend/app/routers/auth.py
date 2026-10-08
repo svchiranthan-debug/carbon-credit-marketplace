@@ -19,14 +19,8 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
             detail="An account with this email address already exists."
         )
         
-    # Validate role
-    role_val = user_in.role.upper()
-    if role_val not in [r.value for r in UserRole]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role '{user_in.role}'. Allowed roles are: FARMER, BUYER, AUDITOR."
-        )
-        
+    # Role is validated by UserCreate (FARMER, BUYER or AUDITOR only; ADMIN cannot self-register)
+    role_val = user_in.role
     db_user = User(
         email=user_in.email.lower(),
         hashed_password=get_password_hash(user_in.password),
