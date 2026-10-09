@@ -61,6 +61,10 @@ The old classifier was trained only on computer-generated images and scored **49
 - **Result:** accuracy **98.4%**, macro F1 0.984 on the held-out test set (`ml/reports/evaluation_v2.md`). Training takes ~12 minutes on a laptop CPU.
 - **Remaining gap:** the dataset has no areca, coconut or agroforestry photos, so "plantation" means "tree canopy". Accuracy on real plantation field photos is not measured yet; a small set of real farm photos would close that gap. The task brief mentions logistic regression; this project uses a CNN, which was kept.
 
+## Multi-photo evidence (PR #5)
+
+Farmers can upload up to 10 photos per plot (web: multi-select with per-photo status, remove and retry; phone: multi-select from the gallery or several camera shots). The auditor sees every photo in a gallery with full-size view, per-photo prediction and confidence, upload time, EXIF provenance (unverified) and warnings for invalid, duplicate, low-confidence and non-plantation photos. CV score = lower median of unique photos; conflicting or low-confidence photos cap the decision at REVIEW. Photos are served only through signed links.
+
 ## Open issues
 
 
@@ -78,3 +82,5 @@ The old classifier was trained only on computer-generated images and scored **49
 | ~~Desktop sidebar overlaps the header title~~ **Fixed (PR #2)** | `frontend/src/App.jsx` | — |
 | Credits are sold as whole lots only (no partial purchases) | `routers/transactions.py`, contract | Deliberate: the contract has no split operation; adding one needs a contract change |
 | Mobile app not run on a physical device in this audit | `mobile/` | Test with Expo Go on the same Wi-Fi as the backend |
+| Phone auditor screen shows the first photo only (the web auditor page has the full gallery) | `mobile/src/screens/AuditorScreen.tsx` | Use the web auditor page for multi-photo review |
+| Live Sentinel-2 check could not be run from the development environment (network blocked) | `scripts/check_live_ndvi.py` | Run it once on a laptop with internet |

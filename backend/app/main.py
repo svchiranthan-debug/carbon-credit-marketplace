@@ -1,7 +1,7 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import init_db
@@ -35,7 +35,20 @@ app.add_middleware(
 )
 
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+
+
+@app.get("/uploads/{filename}", include_in_schema=False)
+def serve_upload(filename: str, exp: str = None, sig: str = None):
+    """Evidence photos are private: only signed links issued by the API (to users allowed to
+    see the plantation) are served, and only until they expire."""
+    from .services.photo_store import upload_path, verify_upload_signature
+
+    if not verify_upload_signature(filename, exp, sig):
+        raise HTTPException(status_code=403, detail="Photo link is missing, invalid or expired.")
+    path = upload_path(filename)
+    if not path:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 # Include Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)

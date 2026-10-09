@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     # --- Uploads ---
     UPLOAD_DIR: str = os.path.join(BACKEND_DIR, "uploads")
     MAX_UPLOAD_BYTES: int = 15 * 1024 * 1024  # 15 MB per image
+    MAX_PHOTOS_PER_PLANTATION: int = 10       # active ground photos per plantation
+    # Photos are served only through signed links issued to authorised users.
+    PHOTO_URL_TTL_S: int = 3600
+    # Multi-photo CV: below this classifier confidence (%) a photo counts as low-confidence.
+    CV_LOW_CONFIDENCE_PCT: float = 60.0
+    # pHash Hamming distance at or below which two photos are treated as near-duplicates.
+    PHOTO_NEAR_DUPLICATE_DISTANCE: int = 6
 
     # --- Carbon estimation (transparent prototype assumptions) ---
     DEFAULT_SEQUESTRATION_RATE_PER_TREE: float = 0.05  # tCO2e / tree / year

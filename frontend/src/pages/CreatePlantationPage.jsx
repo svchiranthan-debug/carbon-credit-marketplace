@@ -1,11 +1,11 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../services/api";
 import PlantationMap from "../components/PlantationMap";
+import PhotoEvidenceUploader from "../components/PhotoEvidenceUploader";
 import { 
   ArrowRight, 
   ArrowLeft, 
-  FileImage, 
   AlertCircle, 
   Check, 
   
@@ -19,8 +19,10 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
+  const uploaderRef = useRef(null);
+  const [photoCount, setPhotoCount] = useState(0);
+  // Set once the plantation exists but some photos failed to upload (retry before continuing)
+  const [registered, setRegistered] = useState(null);
   const [createdPlantation, setCreatedPlantation] = useState(null);
 
   const [formData, setFormData] = useState({
@@ -36,25 +38,10 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
     tree_species: "",
     plantation_type: "Agroforestry",
     sustainable_practice: "Standard Organic Agroforestry",
-    image_url: null,
     soil_soc_pct: "",
     soil_depth_cm: "",
     soil_type: ""
   });
-
-  const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setImageFile(file);
-      setImagePreview(URL.createObjectURL(file));
-    }
-  };
-
-  const handleRemoveImage = () => {
-    setImageFile(null);
-    setImagePreview(null);
-    setFormData({ ...formData, image_url: null });
-  };
 
   // Callback from PlantationMap when user draws/edits polygon
   const handleUpdateGeometry = (geoData) => {
@@ -139,42 +126,44 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
     if (validateStep3()) setCurrentStep(4);
   };
 
-  // Form submission
+  // Form submission: register the plantation, then upload each queued photo separately
   const handleSubmit = async () => {
     setError(null);
     setLoading(true);
 
     try {
-      let finalImageUrl = formData.image_url;
-
-      if (imageFile) {
-        const uploadRes = await api.uploadImage(imageFile);
-        finalImageUrl = uploadRes.image_url;
+      let plantation = registered;
+      if (!plantation) {
+        const hasSoil = (formData.soil_soc_pct !== "" && formData.soil_soc_pct !== null && formData.soil_soc_pct !== undefined);
+        const payload = {
+          name: formData.name.trim(),
+          farmer_name: formData.farmer_name || user?.full_name || "Farmer",
+          location: formData.location.trim(),
+          latitude: parseFloat(formData.latitude),
+          longitude: parseFloat(formData.longitude),
+          area_hectares: parseFloat(formData.area_hectares),
+          plantation_age_years: parseFloat(formData.plantation_age_years || 2.0),
+          tree_count: parseInt(formData.tree_count, 10),
+          tree_species: formData.tree_species.trim(),
+          plantation_type: formData.plantation_type || "Agroforestry",
+          sustainable_practice: formData.sustainable_practice || "Standard Organic Agroforestry",
+          boundary: formData.boundary || null,
+          soil_soc_pct: hasSoil ? parseFloat(formData.soil_soc_pct) : null,
+          soil_depth_cm: (hasSoil && formData.soil_depth_cm) ? parseFloat(formData.soil_depth_cm) : null,
+          soil_type: (hasSoil && formData.soil_type) ? formData.soil_type : null
+        };
+        plantation = await api.createPlantation(payload);
       }
 
-      const hasSoil = (formData.soil_soc_pct !== "" && formData.soil_soc_pct !== null && formData.soil_soc_pct !== undefined);
-
-      const payload = {
-        name: formData.name.trim(),
-        farmer_name: formData.farmer_name || user?.full_name || "Farmer",
-        location: formData.location.trim(),
-        latitude: parseFloat(formData.latitude),
-        longitude: parseFloat(formData.longitude),
-        area_hectares: parseFloat(formData.area_hectares),
-        plantation_age_years: parseFloat(formData.plantation_age_years || 2.0),
-        tree_count: parseInt(formData.tree_count, 10),
-        tree_species: formData.tree_species.trim(),
-        plantation_type: formData.plantation_type || "Agroforestry",
-        sustainable_practice: formData.sustainable_practice || "Standard Organic Agroforestry",
-        image_url: finalImageUrl || null,
-        boundary: formData.boundary || null,
-        soil_soc_pct: hasSoil ? parseFloat(formData.soil_soc_pct) : null,
-        soil_depth_cm: (hasSoil && formData.soil_depth_cm) ? parseFloat(formData.soil_depth_cm) : null,
-        soil_type: (hasSoil && formData.soil_type) ? formData.soil_type : null
-      };
-
-      const newPlantation = await api.createPlantation(payload);
-      setCreatedPlantation(newPlantation);
+      const { failed } = (await uploaderRef.current?.uploadAll(plantation.id)) || { failed: 0 };
+      if (failed > 0) {
+        // Keep the farmer here: successful photos are saved, failed ones can be retried alone.
+        setRegistered(plantation);
+        setCurrentStep(3);
+        setError(`Plantation #${plantation.id} is registered, but ${failed} photo(s) failed to upload. Retry or remove them below, then continue.`);
+        return;
+      }
+      setCreatedPlantation(plantation);
     } catch (err) {
       console.error("Plantation registration error:", err);
       setError(err.message || "Unable to create plantation. Please check connection and try again.");
@@ -519,8 +508,8 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
       )}
 
       {/* STEP 3: EVIDENCE (Ground Image, Soil Data) */}
-      {currentStep === 3 && (
-        <div className="bg-white p-6 rounded border border-slate-200 space-y-6 shadow-xs">
+      {(
+        <div className={`bg-white p-6 rounded border border-slate-200 space-y-6 shadow-xs ${currentStep === 3 ? "" : "hidden"}`}>
           <div className="pb-2 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
               Plantation Evidence Submission
@@ -556,15 +545,15 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
             <div className="flex items-center justify-between">
               <div>
                 <span className="text-[11px] font-bold text-slate-900 uppercase tracking-wider block">
-                  GROUND IMAGERY (COMPUTER VISION)
+                  GROUND PHOTOS (COMPUTER VISION)
                 </span>
                 <span className="text-[11px] text-slate-500">
-                  Ground-level photograph required for automated canopy foliage analysis.
+                  Each photo is classified separately; the auditor sees all of them.
                 </span>
               </div>
-              {(imagePreview || formData.image_url) ? (
+              {photoCount > 0 ? (
                 <span className="inline-flex items-center gap-1 text-emerald-800 font-semibold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
-                  <Check className="w-3.5 h-3.5" /> Provided
+                  <Check className="w-3.5 h-3.5" /> {photoCount} photo{photoCount === 1 ? "" : "s"}
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-[11px] font-medium">
@@ -572,35 +561,7 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
                 </span>
               )}
             </div>
-
-            {(imagePreview || formData.image_url) ? (
-              <div className="relative rounded border border-slate-200 overflow-hidden max-w-sm">
-                <img 
-                  src={imagePreview || formData.image_url} 
-                  alt="Plantation preview" 
-                  className="w-full h-36 object-cover" 
-                />
-                <button
-                  type="button"
-                  onClick={handleRemoveImage}
-                  className="absolute top-2 right-2 px-2 py-1 bg-slate-900/80 text-white rounded text-[11px] font-medium hover:bg-slate-900"
-                >
-                  Change / Remove Photo
-                </button>
-              </div>
-            ) : (
-              <label className="border-2 border-dashed border-slate-200 hover:border-slate-400 rounded p-5 flex flex-col items-center justify-center cursor-pointer transition bg-slate-50/50 hover:bg-slate-50">
-                <FileImage className="w-6 h-6 text-slate-400 mb-1" />
-                <span className="font-semibold text-slate-800 text-xs uppercase tracking-wide">Upload Ground Image</span>
-                <span className="text-slate-400 text-[10px] mt-0.5">JPEG, PNG, or WebP up to 10MB</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageChange}
-                  className="hidden"
-                />
-              </label>
-            )}
+            <PhotoEvidenceUploader ref={uploaderRef} plantationId={registered?.id || null} onCountChange={setPhotoCount} />
           </div>
 
           {/* 3. SOIL / SOC */}
@@ -758,13 +719,13 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                {(imagePreview || formData.image_url) ? (
+                {photoCount > 0 ? (
                   <Check className="w-4 h-4 text-emerald-700 shrink-0" />
                 ) : (
                   <span className="w-4 h-4 rounded-full border border-slate-400 inline-block shrink-0" />
                 )}
                 <span>
-                  <strong>Ground Imagery:</strong> {(imagePreview || formData.image_url) ? "Provided" : "Not provided — can be uploaded later"}
+                  <strong>Ground Photos:</strong> {photoCount > 0 ? `${photoCount} photo${photoCount === 1 ? "" : "s"}` : "Not provided — can be uploaded later"}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -779,7 +740,7 @@ export default function CreatePlantationPage({ setCurrentView, setSelectedPlanta
               </div>
             </div>
 
-            {(!imagePreview && !formData.image_url) || (!formData.soil_soc_pct || parseFloat(formData.soil_soc_pct) <= 0) ? (
+            {photoCount === 0 || (!formData.soil_soc_pct || parseFloat(formData.soil_soc_pct) <= 0) ? (
               <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded text-amber-800 text-[11px] leading-relaxed">
                 <strong>Notice:</strong> Verification will remain <strong>PENDING</strong> until both ground imagery and soil carbon data are provided. No carbon credits will be issued until verification is completed.
               </div>

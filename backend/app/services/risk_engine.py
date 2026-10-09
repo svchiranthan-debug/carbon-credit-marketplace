@@ -46,40 +46,51 @@ class RiskEngine:
         cls,
         image_path: Optional[str],
         current_plantation_id: Optional[int] = None,
-        db: Optional[Session] = None
+        db: Optional[Session] = None,
+        image_paths: Optional[List[str]] = None,
     ) -> Tuple[bool, int, str]:
         """
-        Scans other registered plantations to detect if the same ground evidence photo was reused.
+        Detects ground photos reused from ANOTHER plantation (any of its active photos, or its
+        legacy single image). Checks every photo in ``image_paths`` (or just ``image_path``).
         """
-        if not image_path or not os.path.exists(image_path) or db is None:
-            return False, 0, ""
-
-        current_hash_str = cls.compute_image_hash(image_path)
-        if not current_hash_str:
+        paths = [p for p in (image_paths or [image_path]) if p and os.path.exists(p)]
+        if not paths or db is None:
             return False, 0, ""
 
         try:
-            current_hash = imagehash.hex_to_hash(current_hash_str)
-            other_plantations = db.query(Plantation).filter(
-                Plantation.image_url.isnot(None)
-            ).all()
+            from ..models.plantation_photo import PhotoStatus, PlantationPhoto
 
-            for other in other_plantations:
+            candidates: List[Tuple[Plantation, str]] = []  # (other plantation, phash hex)
+            rows = (db.query(PlantationPhoto, Plantation)
+                    .join(Plantation, Plantation.id == PlantationPhoto.plantation_id)
+                    .filter(PlantationPhoto.status == PhotoStatus.ACTIVE).all())
+            covered = set()
+            for photo, other in rows:
                 if current_plantation_id and other.id == current_plantation_id:
                     continue
-                if not other.image_url:
+                covered.add(other.id)
+                h = photo.phash or cls.compute_image_hash(os.path.join(settings.UPLOAD_DIR, photo.filename))
+                if h:
+                    candidates.append((other, h))
+            for other in db.query(Plantation).filter(Plantation.image_url.isnot(None)).all():
+                if other.id in covered or (current_plantation_id and other.id == current_plantation_id):
                     continue
-
-                filename = os.path.basename(other.image_url)
-                candidate_path = os.path.join(settings.UPLOAD_DIR, filename)
+                candidate_path = os.path.join(settings.UPLOAD_DIR, os.path.basename(other.image_url.split("?")[0]))
                 if os.path.exists(candidate_path):
-                    other_hash_str = cls.compute_image_hash(candidate_path)
-                    if other_hash_str:
-                        other_hash = imagehash.hex_to_hash(other_hash_str)
-                        hamming_distance = current_hash - other_hash
-                        # Hamming distance <= 4 indicates exact or near-identical image crop
-                        if hamming_distance <= 4:
-                            return True, 35, f"Duplicate ground image matches plantation #{other.id} ('{other.name}') (pHash distance: {hamming_distance})"
+                    h = cls.compute_image_hash(candidate_path)
+                    if h:
+                        candidates.append((other, h))
+
+            for path in paths:
+                current_hash_str = cls.compute_image_hash(path)
+                if not current_hash_str:
+                    continue
+                current_hash = imagehash.hex_to_hash(current_hash_str)
+                for other, other_hash_str in candidates:
+                    hamming_distance = current_hash - imagehash.hex_to_hash(other_hash_str)
+                    # Hamming distance <= 4 indicates exact or near-identical image crop
+                    if hamming_distance <= 4:
+                        return True, 35, f"Duplicate ground image matches plantation #{other.id} ('{other.name}') (pHash distance: {hamming_distance})"
         except Exception as e:
             logger.warning(f"Duplicate scan error: {e}")
 
@@ -93,7 +104,8 @@ class RiskEngine:
         cv_res: Dict[str, Any],
         soc_res: Dict[str, Any],
         image_path: Optional[str] = None,
-        db: Optional[Session] = None
+        db: Optional[Session] = None,
+        image_paths: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Evaluates transparent composite risk score and outputs list of explainable risk factors.
@@ -108,7 +120,8 @@ class RiskEngine:
         is_dup, dup_pts, dup_msg = cls.check_duplicate_image(
             image_path=image_path,
             current_plantation_id=plantation.id,
-            db=db
+            db=db,
+            image_paths=image_paths,
         )
         if is_dup:
             risk_score += dup_pts

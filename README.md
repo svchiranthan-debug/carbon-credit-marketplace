@@ -48,14 +48,14 @@ Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarb
 
 ```
 Farmer registers plot (boundary + area)                     status SUBMITTED, verification PENDING
-   └─ submits ground photo + soil SOC (+ optional reported NDVI)
+   └─ submits ground photos (1–10) + soil SOC (+ optional reported NDVI)
         └─ Verification run
              NDVI   ← cloud-free Sentinel-2 B04/B08 pixels inside the drawn boundary   (or reported value + source + date)
-             CV     ← MobileNetV3 ground-photo classifier
+             CV     ← MobileNetV3 classifier on each photo → lower median of unique photos
              SOC    ← soil test value, benchmarked
              Score = 0.40·NDVI + 0.35·CV + 0.25·SOC
              ≥75 APPROVED · ≥55 REVIEW · <55 REJECTED · any modality missing → PENDING
-             HIGH fraud risk or reported NDVI → at most REVIEW (auditor must confirm)
+             HIGH fraud risk, reported NDVI, or conflicting / low-confidence photos → at most REVIEW
         └─ Auditor may approve / keep in review / reject (notes required to override)
              └─ APPROVED → credit lot minted (tCO2e = trees × 0.05 × species × practice factors)
                   └─ recorded on CarbonCreditRegistry (if Ganache is up) → listed in marketplace

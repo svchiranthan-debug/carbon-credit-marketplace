@@ -47,7 +47,7 @@ def test_full_journey_and_failure_cases(api_base):
     # 3. Submit evidence
     up = requests.post(f"{B}/plantations/{p['id']}/image", headers=farmer,
                        files={"file": ("ground.jpg", synthetic_image_bytes("plantation", 17), "image/jpeg")})
-    assert up.status_code == 200
+    assert up.status_code == 200, up.text
     ev = requests.put(f"{B}/plantations/{p['id']}/evidence", headers=farmer,
                       json={"soil_soc_pct": 2.2, "soil_depth_cm": 30, "soil_type": "Red Soil", **TEST_NDVI})
     assert ev.status_code == 200

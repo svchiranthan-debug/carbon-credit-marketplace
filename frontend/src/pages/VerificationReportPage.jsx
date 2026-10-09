@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import api, { getImageUrl } from "../services/api";
+import api from "../services/api";
 import StatusBadge from "../components/StatusBadge";
+import PhotoGallery from "../components/PhotoGallery";
+import PhotoEvidenceUploader from "../components/PhotoEvidenceUploader";
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, FileImage, History, RefreshCw, ShieldCheck, Upload, X,
+  AlertTriangle, ArrowLeft, ArrowRight, History, RefreshCw, ShieldCheck, Upload, X,
 } from "lucide-react";
 
 /**
@@ -73,6 +75,7 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
   const [showHistory, setShowHistory] = useState(false);
   const [showEvidence, setShowEvidence] = useState(false);
   const [decisionNotes, setDecisionNotes] = useState("");
+  const [galleryKey, setGalleryKey] = useState(0);
 
   const load = async () => {
     if (!plantationId) return;
@@ -89,6 +92,7 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
       setVerification(ver);
       setHistory(hist || []);
       setCredit((credits || []).find((c) => c.plantation_id === Number(plantationId)) || null);
+      setGalleryKey((k) => k + 1);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -229,27 +233,24 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
 
         <div className="bg-white border border-slate-200 rounded p-4 md:col-span-2">
           <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Submitted evidence</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="h-40 rounded border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center">
-              {plantation.image_url ? (
-                <img src={getImageUrl(plantation.image_url)} alt="Ground evidence" className="w-full h-full object-cover" />
-              ) : (
-                <div className="text-center text-slate-400">
-                  <FileImage className="w-6 h-6 mx-auto mb-1" />
-                  Ground photo not provided
-                </div>
-              )}
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
             <div>
               <Row label="Boundary" value={v.evidence_status?.boundary} mono />
-              <Row label="Ground photo" value={v.evidence_status?.ground_imagery} mono />
+              <Row label="Ground photos" value={v.evidence_status?.ground_imagery} mono />
               <Row label="Soil carbon" value={v.evidence_status?.soil_carbon} mono />
+            </div>
+            <div>
               <Row label="Satellite NDVI" value={v.evidence_status?.satellite_ndvi} mono />
               <Row label="SOC submitted" value={plantation.soil_soc_pct ? `${plantation.soil_soc_pct}%` : DASH} mono />
               <Row label="Reported NDVI" value={plantation.ndvi_reported_value ?? DASH} mono />
             </div>
           </div>
         </div>
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded p-4 space-y-2">
+        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Ground photos</h3>
+        <PhotoGallery plantationId={plantationId} verification={v.is_persisted !== false ? v : null} refreshKey={galleryKey} />
       </section>
 
       {/* Modalities */}
@@ -275,8 +276,10 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
           )}
         </ModalityCard>
         <ModalityCard title="Ground photo (CV)" weight="0.35" score={v.cv_score} contribution={v.cv_contribution} status={v.cv_detection_status}>
-          <Row label="Predicted class" value={v.ai_predicted_class} mono />
-          <Row label="Confidence" value={v.ai_confidence_pct == null ? DASH : `${num(v.ai_confidence_pct)}%`} mono />
+          <Row label="Photos scored" value={v.evidence_snapshot?.cv_measurement?.aggregation
+            ? `${v.evidence_snapshot.cv_measurement.aggregation.photos_scored} of ${v.evidence_snapshot.cv_measurement.aggregation.photos_submitted}` : DASH} mono />
+          <Row label="Median photo class" value={v.ai_predicted_class} mono />
+          <Row label="Its confidence" value={v.ai_confidence_pct == null ? DASH : `${num(v.ai_confidence_pct)}%`} mono />
           <Row label="Image quality" value={num(v.image_quality_score)} mono />
           <Row label="Model" value={v.ai_model_name ? `${v.ai_model_name} ${v.ai_model_version || ""}` : DASH} />
         </ModalityCard>
@@ -413,7 +416,6 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
 
 function EvidenceModal({ plantation, onClose, onSaved }) {
   // Fields start from what the farmer already submitted — never from example values.
-  const [file, setFile] = useState(null);
   const [soc, setSoc] = useState(plantation.soil_soc_pct ?? "");
   const [depth, setDepth] = useState(plantation.soil_depth_cm ?? "");
   const [soilType, setSoilType] = useState(plantation.soil_type ?? "");
@@ -429,7 +431,6 @@ function EvidenceModal({ plantation, onClose, onSaved }) {
     setErr(null);
     try {
       const body = {};
-      if (file) body.image_url = (await api.uploadImage(file)).image_url;
       if (soc !== "") body.soil_soc_pct = Number(soc);
       if (depth !== "") body.soil_depth_cm = Number(depth);
       if (soilType.trim()) body.soil_type = soilType.trim();
@@ -440,8 +441,8 @@ function EvidenceModal({ plantation, onClose, onSaved }) {
         }
         Object.assign(body, { ndvi_reported_value: Number(ndviValue), ndvi_reported_source: ndviSource.trim(), ndvi_reported_date: ndviDate });
       }
-      if (Object.keys(body).length === 0) throw new Error("Nothing to submit.");
-      await api.updatePlantationEvidence(plantation.id, body);
+      // Photos are uploaded as soon as they are added; only the other fields are saved here.
+      if (Object.keys(body).length > 0) await api.updatePlantationEvidence(plantation.id, body);
       await onSaved();
     } catch (error) {
       setErr(error.message);
@@ -453,15 +454,15 @@ function EvidenceModal({ plantation, onClose, onSaved }) {
   const input = "w-full border border-slate-200 rounded px-2 py-1.5 text-xs";
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-      <form onSubmit={submit} className="bg-white rounded-lg w-full max-w-lg p-5 space-y-3 text-xs max-h-[90vh] overflow-y-auto">
+      <form onSubmit={submit} className="bg-white rounded-lg w-full max-w-2xl p-5 space-y-3 text-xs max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center">
           <h3 className="font-bold text-sm">Submit evidence</h3>
           <button type="button" onClick={onClose}><X className="w-4 h-4" /></button>
         </div>
-        <label className="block space-y-1">
-          <span className="font-semibold">Ground photograph {plantation.image_url ? "(replace)" : ""}</span>
-          <input type="file" accept="image/jpeg,image/png,image/webp,image/tiff" onChange={(e) => setFile(e.target.files[0] || null)} />
-        </label>
+        <div className="space-y-1">
+          <span className="font-semibold">Ground photos</span>
+          <PhotoEvidenceUploader plantationId={plantation.id} />
+        </div>
         <div className="grid grid-cols-3 gap-2">
           <label className="space-y-1"><span>SOC %</span><input className={input} type="number" step="0.01" min="0.01" max="10" value={soc} onChange={(e) => setSoc(e.target.value)} placeholder="from soil test" /></label>
           <label className="space-y-1"><span>Depth cm</span><input className={input} type="number" min="1" max="300" value={depth} onChange={(e) => setDepth(e.target.value)} /></label>

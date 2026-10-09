@@ -46,6 +46,10 @@ All have development defaults (`app/config.py`); set them in `backend/.env` or t
 | `CORS_ORIGINS` | `*` | Comma-separated allowed browser origins |
 | `ENABLE_REAL_SATELLITE_QUERIES` | `true` | Compute NDVI from Sentinel-2 (Microsoft Planetary Computer) |
 | `PLANETARY_COMPUTER_API_KEY` | empty | Optional subscription key |
+| `MAX_PHOTOS_PER_PLANTATION` | `10` | Active ground photos per plantation |
+| `PHOTO_URL_TTL_S` | `3600` | Lifetime of signed photo links |
+| `CV_LOW_CONFIDENCE_PCT` | `60` | Photos below this classifier confidence count as low-confidence |
+| `PHOTO_NEAR_DUPLICATE_DISTANCE` | `6` | pHash distance at or below which two photos of a plot are near-duplicates |
 | `SATELLITE_LOOKBACK_DAYS` | `120` | Scene search window (days before today) |
 | `SATELLITE_MAX_SCENE_CLOUD_PCT` | `20` | Scene-level cloud cover limit (`eo:cloud_cover`) |
 | `SATELLITE_MAX_SCENES_TRIED` | `3` | Least-cloudy scenes tried before NDVI is reported unavailable |
@@ -71,6 +75,23 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - Health: `http://localhost:8000/api/health`, chain status: `http://localhost:8000/api/blockchain/status`
 
 Demo accounts (password `Demo@123`): `farmer@agrocarbon.demo`, `farmer2@agrocarbon.demo`, `buyer@ecocorp.demo`, `buyer2@greeninvest.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo`. Public registration allows FARMER, BUYER and AUDITOR. ADMIN accounts come from `seed_data.py`; an ADMIN can also create accounts with `POST /api/users` (or the admin dashboard form).
+
+## Ground photos (multi-photo evidence)
+
+A plantation can have up to 10 ground photos (`plantation_photos` table, created automatically; older single-photo plantations get a photo row on startup, nothing is deleted).
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `POST /api/plantations/{id}/photos` | owning farmer | Add ONE photo (send several requests for several photos, so each has its own status and can be retried) |
+| `GET /api/plantations/{id}/photos` | owner, auditor, admin (buyers: verified plots only) | All active photos with per-photo classifier result, warnings and a signed link |
+| `DELETE /api/plantations/{id}/photos/{photo_id}` | owning farmer | Withdraw a photo before verification (file is kept for audit) |
+| `POST /api/plantations/{id}/image`, `PUT …/evidence {image_url}`, `POST /upload-image` | as before | Older clients: each call **adds** a photo |
+
+- A file is accepted only if it decodes as JPEG/PNG/WEBP/TIFF (the extension and MIME type are not trusted), is within `MAX_UPLOAD_BYTES`, and is not an exact copy of a photo already on the plot. Rejected uploads leave no file behind.
+- Photos are **not public**: `/uploads/<file>` only serves signed links (`?exp=…&sig=…`) that the API gives to users allowed to see the plantation. Links expire after 1–2 hours.
+- Evidence is locked once credits are issued.
+
+**How the photo (CV) score is formed.** The existing classifier runs on every valid photo, and each result is stored on the photo and in the verification's `evidence_snapshot.photos`. Near-duplicates (pHash) count once. The CV score is the **lower median** of the unique photos' scores: one good photo cannot lift poor or unrelated ones, and scores are never added up. If the photos disagree (plantation vs. confident non-plantation) or confidence is low (< 60% for the median photo or for most photos), an APPROVED result is capped at REVIEW. With no scorable photo the plot stays PENDING. Extra photos never replace missing NDVI or soil data. Weights and thresholds are unchanged.
 
 ## Live satellite check
 

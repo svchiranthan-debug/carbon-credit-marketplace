@@ -105,6 +105,8 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
           <div className="grid grid-cols-1 gap-4">
             {filteredQueue.map((item) => {
               const hasGroundImage = Boolean(item.image_url);
+              const photoAgg = item.evidence_snapshot?.cv_measurement?.aggregation;
+              const photoCount = photoAgg?.photos_submitted ?? (hasGroundImage ? null : 0);
               const hasSoil = Boolean(item.soc_score !== null || item.soc_pct !== null);
               const regDate = item.verified_at ? new Date(item.verified_at).toLocaleDateString("en-IN", {
                 day: "numeric",
@@ -192,11 +194,16 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                           hasGroundImage ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-amber-50 text-amber-800 border-amber-200"
                         }`}>
-                          Ground Photo: {hasGroundImage ? "Provided" : "Not Provided"}
+                          Ground Photos: {hasGroundImage ? (photoCount ? `${photoCount} (${photoAgg.photos_scored} scored)` : "Provided") : "Not Provided"}
                         </span>
+                        {photoAgg?.flags?.length > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200">
+                            Photo check: {photoAgg.flags.map((f) => (f === "CONFLICTING" ? "photos disagree" : "low confidence")).join(", ")}
+                          </span>
+                        )}
                         {item.ai_confidence_pct !== null && item.ai_confidence_pct !== undefined && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-900 border border-blue-200">
-                            AI: {item.ai_predicted_class || "Plantation"} ({item.ai_confidence_pct}%)
+                            AI: {item.ai_predicted_class || "—"} ({item.ai_confidence_pct}%)
                           </span>
                         )}
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border ${

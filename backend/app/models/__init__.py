@@ -1,5 +1,6 @@
 from .user import User, UserRole
 from .plantation import Plantation, PlantationStatus
+from .plantation_photo import PlantationPhoto, PhotoStatus
 from .verification import Verification, VerificationDecision
 from .credit import Credit, CreditStatus
 from .transaction import Transaction, TransactionStatus
@@ -10,6 +11,8 @@ __all__ = [
     "UserRole",
     "Plantation",
     "PlantationStatus",
+    "PlantationPhoto",
+    "PhotoStatus",
     "Verification",
     "VerificationDecision",
     "Credit",
