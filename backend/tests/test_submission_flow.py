@@ -65,10 +65,11 @@ def test_ownership_isolation(client, farmer):
 def test_upload_validation_and_serving(client, farmer):
     url = upload_image(client, farmer[0])
     assert url.startswith("/uploads/")
-    served = client.get(url)
+    served = client.get(url)   # signed link from the API
     assert served.status_code == 200 and served.content[:2] == b"\xff\xd8"
+    assert client.get(url.split("?")[0]).status_code == 403          # photos are not public
     bad_ext = client.post("/api/plantations/upload-image", headers=farmer[0], files={"file": ("x.txt", b"hello", "text/plain")})
-    assert bad_ext.status_code == 400
+    assert bad_ext.status_code == 415
     fake_jpg = client.post("/api/plantations/upload-image", headers=farmer[0], files={"file": ("x.jpg", b"not really", "image/jpeg")})
     assert fake_jpg.status_code == 400 and "decoded" in fake_jpg.json()["detail"]
 

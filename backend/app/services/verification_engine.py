@@ -37,6 +37,9 @@ from .ai.ndvi_service import NDVIService, PROVENANCE_REPORTED
 from .ai.soc_service import SOCService
 from .geometry import lonlat_ring
 from .risk_engine import RiskEngine
+from .photo_cv import assess_photos
+from .photo_store import ensure_photo_rows
+from ..models.plantation_photo import PhotoStatus
 
 ENGINE_NAME = "VERIFICATION_ENGINE"
 ENGINE_VERSION = "2.0"
@@ -83,10 +86,21 @@ class VerificationEngine:
             and plantation.area_hectares > 0
         )
 
-        image_path = resolve_upload_path(plantation.image_url)
-        image_ok, image_reason, _ = validate_image_file(image_path)
-        if plantation.image_url and not image_path:
-            image_reason = "Ground photograph URL does not point to an uploaded file."
+        # Ground photos: every ACTIVE photo row; plantations from before multi-photo support
+        # may only have image_url, which counts as their single photo.
+        photo_rows = [p for p in (plantation.photos or []) if p.status == PhotoStatus.ACTIVE]
+        candidates = [f"/uploads/{p.filename}" for p in photo_rows] or ([plantation.image_url] if plantation.image_url else [])
+        image_path, image_reason, valid_count = None, "No ground photograph provided.", 0
+        for url in candidates:
+            path = resolve_upload_path(url)
+            ok, reason, _ = validate_image_file(path)
+            if ok:
+                valid_count += 1
+                image_path = image_path or path
+            elif image_path is None:
+                image_reason = reason if path else "Ground photograph URL does not point to an uploaded file."
+        image_ok = valid_count > 0
+        has_any_photo = bool(candidates)
 
         has_soil = plantation.soil_soc_pct is not None and 0 < plantation.soil_soc_pct <= 10
         has_reported_ndvi = (
@@ -111,11 +125,13 @@ class VerificationEngine:
             "has_soil": has_soil,
             "has_reported_ndvi": has_reported_ndvi,
             "image_path": image_path if image_ok else None,
+            "photo_count": len(candidates),
+            "valid_photo_count": valid_count,
             "missing_modalities": missing,
             "evidence_status": {
                 "boundary": "PROVIDED" if has_boundary else "NOT PROVIDED",
                 "boundary_type": "POLYGON" if plantation.boundary_geojson else "CENTRE_AND_AREA",
-                "ground_imagery": "PROVIDED" if image_ok else ("INVALID" if plantation.image_url else "NOT PROVIDED"),
+                "ground_imagery": "PROVIDED" if image_ok else ("INVALID" if has_any_photo else "NOT PROVIDED"),
                 "soil_carbon": "PROVIDED" if has_soil else "NOT PROVIDED",
                 # NDVI is measured during a verification run; before that it is pending.
                 "satellite_ndvi": "REPORTED" if has_reported_ndvi else "PENDING",
@@ -186,7 +202,7 @@ class VerificationEngine:
         if not audit["is_complete"]:
             for item in audit["missing_modalities"]:
                 reasons.append(f"Missing required evidence: {item}.")
-            if audit["ground_image_issue"] and plantation.image_url:
+            if audit["ground_image_issue"] and audit["photo_count"]:
                 reasons.append(f"Ground photograph rejected: {audit['ground_image_issue']}")
             reasons.append("Decision PENDING: no score is computed until all required evidence is submitted.")
             # Show the SOC value the farmer did submit, if any (it is real input, not a score).
@@ -206,7 +222,11 @@ class VerificationEngine:
             reported_source=plantation.ndvi_reported_source,
             reported_date=plantation.ndvi_reported_date,
         )
-        cv = CVService.analyze_image(audit["image_path"])
+        if db is not None:
+            cv = assess_photos(ensure_photo_rows(db, plantation))
+        else:  # unit use without a session: single cover photo
+            cv = CVService.analyze_image(audit["image_path"])
+            cv.setdefault("flags", [])
         soc = SOCService.evaluate_soc(plantation.soil_soc_pct, plantation.soil_depth_cm, plantation.soil_type)
 
         result.update({
@@ -241,7 +261,10 @@ class VerificationEngine:
         result["evidence_snapshot"]["cv_measurement"] = {
             "model_name": cv["model_name"], "model_version": cv["model_version"],
             "class_probabilities": cv["class_probabilities"], "training_data": cv.get("training_data"),
+            "aggregation": cv.get("aggregation"),
         }
+        if cv.get("photos") is not None:
+            result["evidence_snapshot"]["photos"] = cv["photos"]
 
         unavailable: List[str] = []
         if not ndvi["available"]:
@@ -277,8 +300,12 @@ class VerificationEngine:
         reasons = [
             f"NDVI {ndvi['mean_ndvi']} ({'Sentinel-2 computed' if ndvi['provenance'] != PROVENANCE_REPORTED else 'reported: ' + str(plantation.ndvi_reported_source)}) "
             f"→ score {ndvi['ndvi_score']} × {cls.WEIGHT_NDVI} = {ndvi_c}.",
-            f"Ground photo classified as '{cv['predicted_class']}' ({cv['confidence_pct']}% confidence) "
-            f"→ score {cv['cv_score']} × {cls.WEIGHT_CV} = {cv_c}.",
+            (f"Ground photo classified as '{cv['predicted_class']}' ({cv['confidence_pct']}% confidence) "
+             if (cv.get("aggregation") or {}).get("photos_scored", 1) <= 1 else
+             f"Ground photos: {cv['aggregation']['photos_scored']} unique photos scored "
+             f"{cv['aggregation']['per_photo_scores']}, lower median from a photo classified "
+             f"'{cv['predicted_class']}' ({cv['confidence_pct']}% confidence) ")
+            + f"→ score {cv['cv_score']} × {cls.WEIGHT_CV} = {cv_c}.",
             f"Soil organic carbon {soc['soc_pct']}% → score {soc['soc_score']} × {cls.WEIGHT_SOC} = {soc_c}.",
             f"Overall score {overall}/100.",
         ]
@@ -295,7 +322,8 @@ class VerificationEngine:
         # ---- Rule 4: fraud / risk ---------------------------------------------------
         risk = RiskEngine.evaluate_risk(
             plantation=plantation, ndvi_res=ndvi, cv_res=cv, soc_res=soc,
-            image_path=audit["image_path"], db=db,
+            image_path=cv.get("representative_path") or audit["image_path"], db=db,
+            image_paths=[p for p in (cv.get("unique_paths") or []) if p],
         )
         result.update({
             "risk_score": risk["risk_score"], "risk_level": risk["risk_level"],
@@ -312,6 +340,18 @@ class VerificationEngine:
         if ndvi["provenance"] == PROVENANCE_REPORTED and decision == VerificationDecision.APPROVED.value:
             decision = VerificationDecision.REVIEW.value
             reasons.append("NDVI was reported, not computed by the backend: approval requires auditor confirmation.")
+
+        # ---- Rule 6: uncertain or conflicting ground photos need human review -----
+        flags = cv.get("flags") or []
+        if flags and decision == VerificationDecision.APPROVED.value:
+            decision = VerificationDecision.REVIEW.value
+            if "CONFLICTING" in flags:
+                reasons.append("Ground photos disagree (plantation vs. non-plantation): approval requires auditor review.")
+            if "LOW_CONFIDENCE" in flags:
+                reasons.append(f"Ground-photo classification confidence is low (< {settings.CV_LOW_CONFIDENCE_PCT:.0f}%): "
+                               "approval requires auditor review.")
+        elif flags:
+            reasons.append(f"Ground-photo flags: {', '.join(flags)}.")
 
         summary = (
             f"Overall score {overall}/100 → {decision}. NDVI {ndvi['mean_ndvi']} ({ndvi['provenance']}), "

@@ -137,6 +137,10 @@ class MobileApiClient {
     });
   }
 
+  async listPhotos(plantationId: number) {
+    return this.request(`/plantations/${plantationId}/photos`);
+  }
+
   // Multi-Modal Verification
   async getVerification(plantationId: number) {
     return this.request(`/plantations/${plantationId}/verification`);

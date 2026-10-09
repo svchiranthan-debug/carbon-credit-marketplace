@@ -46,6 +46,23 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _add_missing_columns()
     _add_missing_indexes()
+    _backfill_photo_records()
+
+
+def _backfill_photo_records() -> None:
+    """Older plantations stored one photo in plantations.image_url: give each a photo row (additive)."""
+    from .services.photo_store import backfill_legacy_photos
+
+    db = SessionLocal()
+    try:
+        created = backfill_legacy_photos(db)
+        if created:
+            logger.info("Created %d photo records for single-photo plantations", created)
+    except Exception as exc:  # never block startup on this
+        db.rollback()
+        logger.warning("Photo backfill skipped: %s", exc)
+    finally:
+        db.close()
 
 
 def _add_missing_columns() -> None:

@@ -1,7 +1,7 @@
 import re
 from datetime import date, datetime
 from typing import Any, Optional, List, Dict
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Public sign-up (as in the original design): FARMER, BUYER and AUDITOR. ADMIN accounts are
@@ -16,6 +16,52 @@ def _clean(value: Optional[str]) -> Optional[str]:
         return None
     value = value.strip()
     return value or None
+
+
+class SignedImageMixin(BaseModel):
+    """Photos are not public: image_url is returned as a short-lived signed link."""
+
+    @field_serializer("image_url", check_fields=False)
+    def _sign_image_url(self, value: Optional[str]) -> Optional[str]:
+        from ..services.photo_store import sign_upload_url
+        return sign_upload_url(value)
+
+
+class PhotoResponse(BaseModel):
+    id: int
+    plantation_id: int
+    url: Optional[str] = None                 # signed link, valid for about an hour
+    original_name: Optional[str] = None
+    image_format: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    size_bytes: Optional[int] = None
+    sha256: Optional[str] = None
+    uploaded_at: datetime
+    uploaded_by: Optional[int] = None
+    status: str
+    validation_status: str
+    validation_error: Optional[str] = None
+    duplicate_of_id: Optional[int] = None
+    exif_capture_time: Optional[str] = None
+    exif_gps: Optional[Dict[str, float]] = None
+    exif_camera: Optional[str] = None
+    predicted_class: Optional[str] = None
+    confidence_pct: Optional[float] = None
+    cv_score: Optional[float] = None
+    class_probabilities: Optional[Dict[str, float]] = None
+    model_version: Optional[str] = None
+    classified_at: Optional[datetime] = None
+    classification_error: Optional[str] = None
+    low_confidence: bool = False
+
+
+class PhotoListResponse(BaseModel):
+    plantation_id: int
+    photos: List[PhotoResponse]
+    active_count: int
+    max_photos: int
+    max_bytes: int
 
 # --- AUTH SCHEMAS ---
 class UserBase(BaseModel):
@@ -210,7 +256,7 @@ class PlantationEvidenceUpdate(ReportedNDVIMixin):
         return _clean(v)
 
 
-class PlantationResponse(BaseModel):
+class PlantationResponse(SignedImageMixin):
     id: int
     farmer_id: int
     name: str
@@ -283,7 +329,7 @@ class VerificationRunRequest(BaseModel):
     ground_image_path: Optional[str] = Field(None, max_length=500, description="An /uploads/<file> URL returned by an upload endpoint")
     soc_sample_pct: Optional[float] = Field(None, gt=0, le=10)
 
-class VerificationResponse(BaseModel):
+class VerificationResponse(SignedImageMixin):
     id: Optional[str] = None            # None when no verification has been run yet (preview)
     is_persisted: bool = True
     plantation_id: int
@@ -382,7 +428,7 @@ class IssueCreditsRequest(BaseModel):
     price_per_tco2e: Optional[float] = Field(None, gt=0, le=1_000_000)
 
 # --- CREDIT & MARKETPLACE SCHEMAS ---
-class CreditResponse(BaseModel):
+class CreditResponse(SignedImageMixin):
     id: str
     plantation_id: int
     verification_id: str

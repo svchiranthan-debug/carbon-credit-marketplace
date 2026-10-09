@@ -125,6 +125,21 @@ class ApiService {
     });
   }
 
+  // ---- Ground photos (multi-photo evidence) ----
+  async listPhotos(plantationId) {
+    return await this.request(`/plantations/${plantationId}/photos`);
+  }
+
+  async uploadPhoto(plantationId, file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    return await this.request(`/plantations/${plantationId}/photos`, { method: "POST", body: formData });
+  }
+
+  async removePhoto(plantationId, photoId) {
+    return await this.request(`/plantations/${plantationId}/photos/${photoId}`, { method: "DELETE" });
+  }
+
   async uploadImage(file) {
     const formData = new FormData();
     formData.append("file", file);

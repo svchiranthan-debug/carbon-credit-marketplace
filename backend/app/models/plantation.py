@@ -39,7 +39,7 @@ class Plantation(Base):
     tree_species = Column(String, nullable=False)
     plantation_type = Column(String, nullable=False)  # Agroforestry, Timber, Orchard, Mixed, Silvopasture
     sustainable_practice = Column(String, nullable=True)
-    image_url = Column(String, nullable=True)
+    image_url = Column(String, nullable=True)  # cover photo (first active photo); kept for older clients
 
     # Soil evidence entered by the farmer (null until provided)
     soil_soc_pct = Column(Float, nullable=True)  # Soil Organic Carbon %
@@ -55,6 +55,13 @@ class Plantation(Base):
     status = Column(String, nullable=False, default=PlantationStatus.SUBMITTED.value)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    photos = relationship(
+        "PlantationPhoto",
+        primaryjoin="Plantation.id == foreign(PlantationPhoto.plantation_id)",
+        order_by="PlantationPhoto.id",
+        viewonly=True,
+    )
 
     @property
     def boundary(self):

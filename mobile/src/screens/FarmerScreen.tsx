@@ -17,6 +17,9 @@ import { useAuth } from "../context/AuthContext";
 import CameraCaptureModal from "../components/CameraCaptureModal";
 import PlantationMapModal from "../components/PlantationMapModal";
 
+// Same limit as the backend (MAX_PHOTOS_PER_PLANTATION); the server enforces it too.
+const MAX_PHOTOS = 10;
+
 export default function FarmerScreen() {
   const { user } = useAuth();
   const submittingRef = useRef(false);
@@ -47,7 +50,9 @@ export default function FarmerScreen() {
   const [boundary, setBoundary] = useState<number[][] | null>(null);
   const [longitude, setLongitude] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [imageUri, setImageUri] = useState<string | null>(null);
+  // Ground photos selected for a new registration (uploaded one by one after it is created)
+  const [imageUris, setImageUris] = useState<string[]>([]);
+  const [plotPhotoCount, setPlotPhotoCount] = useState<number | null>(null);
 
   const fetchPlantations = async () => {
     setLoading(true);
@@ -67,6 +72,7 @@ export default function FarmerScreen() {
 
   const loadVerification = async (p: any) => {
     setSelectedPlantation(p);
+    loadPhotoCount(p.id);
     setVerification(null);
     try {
       const ver = await api.getVerification(p.id);
@@ -117,25 +123,47 @@ export default function FarmerScreen() {
   const handlePhotoAccepted = async (uri: string) => {
     setCameraVisible(false);
     if (cameraTargetPlotId) {
-      await handleUploadForPlantation(cameraTargetPlotId, uri);
+      await handleUploadForPlantation(cameraTargetPlotId, [uri]);
     } else {
-      setImageUri(uri);
-      Alert.alert(
-        "GROUND EVIDENCE CAPTURED",
-        "Photo stored and ready to submit with plantation registration."
-      );
+      addSelectedPhotos([uri]);
     }
   };
 
-  // Upload Evidence for Existing Plantation
-  const handleUploadForPlantation = async (plotId: number, uri: string) => {
-    setUploadingImage(true);
+  const addSelectedPhotos = (uris: string[]) => {
+    setImageUris((current) => {
+      const merged = [...current];
+      for (const u of uris) {
+        if (!merged.includes(u) && merged.length < MAX_PHOTOS) merged.push(u);
+      }
+      if (current.length + uris.length > MAX_PHOTOS) {
+        Alert.alert("Photo limit", `At most ${MAX_PHOTOS} photos per plantation.`);
+      }
+      return merged;
+    });
+  };
+
+  const loadPhotoCount = async (plotId: number) => {
     try {
-      const res = await api.uploadPlantationImage(plotId, uri);
-      Alert.alert(
-        "GROUND EVIDENCE CAPTURED",
-        "Ground photo successfully uploaded to backend. You can now execute multi-modal verification."
-      );
+      const res = await api.listPhotos(plotId);
+      setPlotPhotoCount(res.active_count);
+    } catch {
+      setPlotPhotoCount(null);
+    }
+  };
+
+  // Upload ground photos for an existing plantation (one request per photo)
+  const handleUploadForPlantation = async (plotId: number, uris: string[]) => {
+    setUploadingImage(true);
+    const failures: string[] = [];
+    for (const uri of uris) {
+      try {
+        await api.uploadPlantationImage(plotId, uri);
+      } catch (err: any) {
+        console.error(`[Mobile MRV] Upload failure: ${err.message}`);
+        failures.push(err.message || "network error");
+      }
+    }
+    try {
       const data = await api.getPlantations();
       setPlantations(data || []);
       const updated = data.find((p: any) => p.id === plotId);
@@ -143,28 +171,38 @@ export default function FarmerScreen() {
         setSelectedPlantation(updated);
         await loadVerification(updated);
       }
-    } catch (err: any) {
-      console.error(`[Mobile MRV] Upload failure: ${err.message}`);
-      Alert.alert("Upload Failed", err.message || "Network error uploading ground evidence. Please retry.");
+      await loadPhotoCount(plotId);
     } finally {
       setUploadingImage(false);
+    }
+    const ok = uris.length - failures.length;
+    if (failures.length) {
+      Alert.alert("Some uploads failed", `${ok} of ${uris.length} photo(s) uploaded.\n${failures[0]}\nAdd the failed photo(s) again to retry.`);
+    } else {
+      Alert.alert("Photos uploaded", `${ok} photo(s) added to plot #${plotId}. Run verification to re-score.`);
     }
   };
 
   // Pick from Photo Gallery (Secondary / Testing option)
   const handlePickExistingPhoto = async (targetPlotId: number | null = null) => {
     try {
+      const remaining = targetPlotId ? MAX_PHOTOS : MAX_PHOTOS - imageUris.length;
+      if (remaining <= 0) {
+        Alert.alert("Photo limit", `At most ${MAX_PHOTOS} photos per plantation.`);
+        return;
+      }
       const result = await ImagePicker.launchImageLibraryAsync({
-        allowsEditing: true,
+        mediaTypes: "images",
+        allowsMultipleSelection: true,
+        selectionLimit: remaining,
         quality: 0.85
       });
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const uri = result.assets[0].uri;
+        const uris = result.assets.map((a) => a.uri);
         if (targetPlotId) {
-          await handleUploadForPlantation(targetPlotId, uri);
+          await handleUploadForPlantation(targetPlotId, uris);
         } else {
-          setImageUri(uri);
-          Alert.alert("Photo Selected", "Gallery photo loaded as ground evidence.");
+          addSelectedPhotos(uris);
         }
       }
     } catch (err: any) {
@@ -273,21 +311,25 @@ export default function FarmerScreen() {
       });
 
 
-      // 2. Upload ground evidence photo if captured
-      let uploadedImagePath: string | undefined = undefined;
-      if (imageUri) {
-        try {
-          const uploadRes = await api.uploadPlantationImage(newPlot.id, imageUri);
-          uploadedImagePath = uploadRes.image_url;
-        } catch (imgErr: any) {
-          console.error(`[Mobile MRV] Image upload failed: ${imgErr.message}`);
+      // 2. Upload each selected ground photo (one request per photo)
+      if (imageUris.length) {
+        const failures: string[] = [];
+        for (const uri of imageUris) {
+          try {
+            await api.uploadPlantationImage(newPlot.id, uri);
+          } catch (imgErr: any) {
+            console.error(`[Mobile MRV] Image upload failed: ${imgErr.message}`);
+            failures.push(imgErr.message || "network error");
+          }
+        }
+        if (failures.length) {
           Alert.alert(
-            "Evidence Upload Failed",
-            `Plantation #${newPlot.id} was created, but photo upload failed (${imgErr.message}). Verification was not executed. Please use 'RE-CAPTURE PHOTO' or 'UPLOAD EXISTING PHOTO' below to retry.`
+            "Evidence Upload Incomplete",
+            `Plantation #${newPlot.id} was created. ${imageUris.length - failures.length} of ${imageUris.length} photo(s) uploaded (${failures[0]}). Verification was not executed. Use 'ADD PHOTOS' on the plot to retry the missing ones.`
           );
           setName("");
           setBoundary(null);
-          setImageUri(null);
+          setImageUris([]);
           await fetchPlantations();
           setSelectedPlantation(newPlot);
           setVerification(null);
@@ -318,7 +360,7 @@ export default function FarmerScreen() {
 
       setName("");
       setBoundary(null);
-      setImageUri(null);
+      setImageUris([]);
       await fetchPlantations();
       setSelectedPlantation(newPlot);
     } catch (err: any) {
@@ -462,26 +504,39 @@ export default function FarmerScreen() {
         {/* Ground Canopy Photo Evidence Section */}
         <Text style={styles.label}>Ground Canopy Photo Evidence (AI Vision)</Text>
         <View style={styles.photoContainer}>
-          {imageUri ? (
+          {imageUris.length > 0 ? (
             <View style={styles.capturedEvidenceBox}>
-              <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="cover" />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {imageUris.map((uri) => (
+                  <View key={uri} style={styles.thumbWrap}>
+                    <Image source={{ uri }} style={styles.thumbImage} resizeMode="cover" />
+                    <TouchableOpacity
+                      onPress={() => setImageUris((cur) => cur.filter((u) => u !== uri))}
+                      style={styles.thumbRemove}
+                      accessibilityLabel="Remove photo"
+                    >
+                      <Text style={styles.clearBtnText}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
               <View style={styles.capturedBadgeRow}>
                 <View style={styles.evidenceSuccessBadge}>
-                  <Text style={styles.evidenceSuccessText}>✓ GROUND EVIDENCE CAPTURED</Text>
+                  <Text style={styles.evidenceSuccessText}>✓ {imageUris.length} / {MAX_PHOTOS} PHOTOS SELECTED</Text>
                 </View>
-                <TouchableOpacity onPress={() => setImageUri(null)} style={styles.clearBtn}>
-                  <Text style={styles.clearBtnText}>✕ Remove</Text>
-                </TouchableOpacity>
               </View>
-              <Text style={styles.capturedHint}>Image will be uploaded & attached to plot upon submission.</Text>
+              <Text style={styles.capturedHint}>Each photo is uploaded separately when you submit.</Text>
             </View>
           ) : (
             <View style={styles.photoPlaceholder}>
               <Text style={styles.placeholderIcon}>📷</Text>
-              <Text style={styles.placeholderText}>No photo captured yet</Text>
-              <Text style={styles.placeholderSub}>Required for Deep Learning AI computer vision verification</Text>
+              <Text style={styles.placeholderText}>No photos yet</Text>
+              <Text style={styles.placeholderSub}>Required for AI photo verification (1–{MAX_PHOTOS} photos)</Text>
             </View>
           )}
+          <Text style={styles.capturedHint}>
+            Useful photos: a wide view of the plot, tree canopy, rows/spacing between trees, a close-up of typical trees, and the ground or soil.
+          </Text>
 
           <View style={styles.photoBtnRow}>
             {/* Primary Button: Directly Opens Native Camera */}
@@ -489,7 +544,7 @@ export default function FarmerScreen() {
               onPress={() => handleOpenCamera(null)}
               style={styles.primaryCameraBtn}
             >
-              <Text style={styles.primaryCameraBtnText}>📷 CAPTURE PLANTATION PHOTO</Text>
+              <Text style={styles.primaryCameraBtnText}>📷 TAKE A PHOTO</Text>
             </TouchableOpacity>
 
             {/* Secondary Button: Gallery Picker */}
@@ -497,7 +552,7 @@ export default function FarmerScreen() {
               onPress={() => handlePickExistingPhoto(null)}
               style={styles.secondaryPickerBtn}
             >
-              <Text style={styles.secondaryPickerBtnText}>🖼️ UPLOAD EXISTING PHOTO</Text>
+              <Text style={styles.secondaryPickerBtnText}>🖼️ CHOOSE PHOTOS</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -549,17 +604,32 @@ export default function FarmerScreen() {
                 />
                 <View style={styles.evidenceInfoRow}>
                   <View style={styles.evidenceSuccessBadge}>
-                    <Text style={styles.evidenceSuccessText}>✓ GROUND EVIDENCE CAPTURED</Text>
+                    <Text style={styles.evidenceSuccessText}>
+                      ✓ {plotPhotoCount !== null ? `${plotPhotoCount} PHOTO${plotPhotoCount === 1 ? "" : "S"}` : "GROUND EVIDENCE"} ON SERVER
+                    </Text>
                   </View>
-                  <Text style={styles.evidenceTimestamp}>Stored on MRV server</Text>
+                  <Text style={styles.evidenceTimestamp}>First photo shown</Text>
                 </View>
+                {uploadingImage && (
+                  <View style={styles.uploadingBox}>
+                    <ActivityIndicator size="small" color="#166534" />
+                    <Text style={styles.uploadingText}>Uploading photos...</Text>
+                  </View>
+                )}
                 <View style={styles.actionRow}>
                   <TouchableOpacity
                     style={styles.reCaptureBtn}
                     onPress={() => handleOpenCamera(selectedPlantation.id)}
                     disabled={uploadingImage}
                   >
-                    <Text style={styles.reCaptureBtnText}>📷 RE-CAPTURE PHOTO</Text>
+                    <Text style={styles.reCaptureBtnText}>📷 ADD PHOTO</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.reCaptureBtn}
+                    onPress={() => handlePickExistingPhoto(selectedPlantation.id)}
+                    disabled={uploadingImage || (plotPhotoCount ?? 0) >= MAX_PHOTOS}
+                  >
+                    <Text style={styles.reCaptureBtnText}>🖼️ ADD PHOTOS</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.verifyBtn}
@@ -596,7 +666,7 @@ export default function FarmerScreen() {
                       style={styles.secondaryPickerBtn}
                       onPress={() => handlePickExistingPhoto(selectedPlantation.id)}
                     >
-                      <Text style={styles.secondaryPickerBtnText}>🖼️ UPLOAD EXISTING PHOTO</Text>
+                      <Text style={styles.secondaryPickerBtnText}>🖼️ CHOOSE PHOTOS</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -724,6 +794,9 @@ const styles = StyleSheet.create({
   coordText: { fontSize: 11, color: "#64748B", fontFamily: "monospace", marginTop: 4 },
   photoContainer: { marginTop: 6, marginBottom: 12 },
   capturedEvidenceBox: { marginBottom: 8 },
+  thumbWrap: { marginRight: 8, position: "relative" },
+  thumbImage: { width: 96, height: 96, borderRadius: 6 },
+  thumbRemove: { position: "absolute", top: 4, right: 4, backgroundColor: "#FFFFFF", borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
   previewImage: { width: "100%", height: 160, borderRadius: 6 },
   capturedBadgeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 6 },
   evidenceSuccessBadge: { backgroundColor: "#DCFCE7", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, borderWidth: 1, borderColor: "#86EFAC" },

@@ -9,6 +9,7 @@ from ..models.user import User, UserRole
 from ..models.verification import Verification, VerificationDecision
 from ..schemas.schemas import VerificationResponse, VerificationRunRequest
 from ..services.carbon_engine import CarbonEngine, CreditIssuanceError
+from ..services.photo_store import build_photo_record, ensure_photo_rows, refresh_cover, strip_upload_url
 from ..services.verification_engine import VerificationEngine, resolve_upload_path
 from ..services.verification_store import PreviewVerification, hydrate, latest_verification, persist_verification
 
@@ -70,9 +71,17 @@ def run_verification_direct(
         if current_user.role not in (UserRole.FARMER.value, UserRole.ADMIN.value):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owning farmer can change evidence")
         if body.ground_image_path is not None:
-            if not body.ground_image_path.startswith("/uploads/") or resolve_upload_path(body.ground_image_path) is None:
+            canonical = strip_upload_url(body.ground_image_path)
+            if not body.ground_image_path.startswith("/uploads/") or resolve_upload_path(canonical) is None:
                 raise HTTPException(status_code=422, detail="ground_image_path must be an uploaded '/uploads/<file>' path.")
-            plantation.image_url = body.ground_image_path
+            filename = canonical.rsplit("/", 1)[-1]
+            if not any(p.filename == filename for p in ensure_photo_rows(db, plantation)):
+                photo = build_photo_record(plantation.id, filename, current_user.id)
+                if photo.validation_status != "VALID":
+                    raise HTTPException(status_code=422, detail=photo.validation_error or "Invalid photo.")
+                db.add(photo)
+                db.flush()
+            refresh_cover(db, plantation)
         if body.soc_sample_pct is not None:
             plantation.soil_soc_pct = body.soc_sample_pct
         db.commit()
