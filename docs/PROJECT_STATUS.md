@@ -61,6 +61,20 @@ The old classifier was trained only on computer-generated images and scored **49
 - **Result:** accuracy **98.4%**, macro F1 0.984 on the held-out test set (`ml/reports/evaluation_v2.md`). Training takes ~12 minutes on a laptop CPU.
 - **Remaining gap:** the dataset has no areca, coconut or agroforestry photos, so "plantation" means "tree canopy". Accuracy on real plantation field photos is not measured yet; a small set of real farm photos would close that gap. The task brief mentions logistic regression; this project uses a CNN, which was kept.
 
+## Live Sentinel-2 validation (2026-10-09)
+
+`python scripts/check_live_ndvi.py` on a Windows laptop with normal internet access, demo 1-acre plot (12.7590, 75.2010):
+
+| Stage | Result |
+|---|---|
+| STAC search | PASS: 1 scene in 2.5 s |
+| SAS token | PASS |
+| B04 / B08 / SCL window reads | PASS: 7×7 px, EPSG:32643 |
+| Plot + cloud mask | PASS: 36 plot pixels, 100% cloud-free |
+| NDVI | PASS: mean 0.351, min 0.09, max 0.589, canopy ≥ 0.40 on 44.4% of pixels |
+
+Scene `S2C_MSIL2A_20260927T051651_R062_T43PEQ_20260927T101415`, acquired 2026-09-27, scene cloud 3.5%. The demo coordinates are not a surveyed plantation, so the NDVI value itself only shows that the pipeline works.
+
 ## Multi-photo evidence (PR #5)
 
 Farmers can upload up to 10 photos per plot (web: multi-select with per-photo status, remove and retry; phone: multi-select from the gallery or several camera shots). The auditor sees every photo in a gallery with full-size view, per-photo prediction and confidence, upload time, EXIF provenance (unverified) and warnings for invalid, duplicate, low-confidence and non-plantation photos. CV score = lower median of unique photos; conflicting or low-confidence photos cap the decision at REVIEW. Photos are served only through signed links.
@@ -71,7 +85,6 @@ Farmers can upload up to 10 photos per plot (web: multi-select with per-photo st
 
 | Issue | File | Recommended next step |
 |---|---|---|
-| Live Sentinel-2 path not exercised against the real service: this environment cannot reach Planetary Computer (the band-window code is tested on a local GeoTIFF) | `services/ai/satellite_client.py` | Run one verification on a networked laptop and check `ndvi_provenance = SENTINEL2_COMPUTED` |
 | ~~NDVI over a square approximation; no cloud mask~~ **Fixed (PR #2, #3):** the drawn polygon is stored and used (web and mobile); SCL cloud/shadow/cirrus/snow pixels are excluded; ≥ 50% of the plot must be clear. Plots registered with only a GPS pin still use the square | `satellite_client.py` | — |
 | Anyone can self-register as AUDITOR (kept on purpose: sign-in and sign-up work as in the original design). An ADMIN can also create auditors (`POST /api/users`, admin dashboard form) | `schemas/schemas.py` | For a real deployment, restrict AUDITOR sign-up to admins |
 | Existing `carbon_marketplace.db` (from the zip, now untracked): 149 scored verifications with no NDVI provenance (74 labelled "REAL SATELLITE DATA" by the old synthetic-grid path) and 28 AVAILABLE credits, now hidden from the marketplace | local DB | Run `python scripts/audit_legacy_data.py`; start fresh with `seed_data.py --reset` if the old data is not needed |
@@ -83,4 +96,3 @@ Farmers can upload up to 10 photos per plot (web: multi-select with per-photo st
 | Credits are sold as whole lots only (no partial purchases) | `routers/transactions.py`, contract | Deliberate: the contract has no split operation; adding one needs a contract change |
 | Mobile app not run on a physical device in this audit | `mobile/` | Test with Expo Go on the same Wi-Fi as the backend |
 | Phone auditor screen shows the first photo only (the web auditor page has the full gallery) | `mobile/src/screens/AuditorScreen.tsx` | Use the web auditor page for multi-photo review |
-| Live Sentinel-2 check could not be run from the development environment (network blocked) | `scripts/check_live_ndvi.py` | Run it once on a laptop with internet |
