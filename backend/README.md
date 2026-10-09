@@ -46,6 +46,12 @@ All have development defaults (`app/config.py`); set them in `backend/.env` or t
 | `CORS_ORIGINS` | `*` | Comma-separated allowed browser origins |
 | `ENABLE_REAL_SATELLITE_QUERIES` | `true` | Compute NDVI from Sentinel-2 (Microsoft Planetary Computer) |
 | `PLANETARY_COMPUTER_API_KEY` | empty | Optional subscription key |
+| `SATELLITE_LOOKBACK_DAYS` | `120` | Scene search window (days before today) |
+| `SATELLITE_MAX_SCENE_CLOUD_PCT` | `20` | Scene-level cloud cover limit (`eo:cloud_cover`) |
+| `SATELLITE_MAX_SCENES_TRIED` | `3` | Least-cloudy scenes tried before NDVI is reported unavailable |
+| `SATELLITE_MAX_ATTEMPTS` | `3` | Attempts per request on timeouts, connection errors and HTTP 429/5xx (other errors are not retried) |
+| `SATELLITE_RETRY_BACKOFF_S` | `1.0` | First retry wait; doubles each retry. `Retry-After` is honoured (max 10 s) |
+| `SATELLITE_REQUEST_TIMEOUT_S` | `20` | Per-request timeout (catalogue, token, band reads) |
 | `ENABLE_BLOCKCHAIN` | `true` | Record credits on the contract when a node is reachable |
 | `ETHEREUM_RPC_URL` | `http://127.0.0.1:8545` | Ganache / dev node |
 
@@ -65,6 +71,20 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - Health: `http://localhost:8000/api/health`, chain status: `http://localhost:8000/api/blockchain/status`
 
 Demo accounts (password `Demo@123`): `farmer@agrocarbon.demo`, `farmer2@agrocarbon.demo`, `buyer@ecocorp.demo`, `buyer2@greeninvest.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo`. Public registration allows FARMER, BUYER and AUDITOR. ADMIN accounts come from `seed_data.py`; an ADMIN can also create accounts with `POST /api/users` (or the admin dashboard form).
+
+## Live satellite check
+
+The automated tests mock Planetary Computer. To check the real service from a computer with internet access:
+
+```bash
+python scripts/check_live_ndvi.py                          # demo 1-acre plot
+python scripts/check_live_ndvi.py --plantation-id 3         # a plot from your DB (uses its drawn boundary)
+python scripts/check_live_ndvi.py --plantation-id 3 --persist   # also runs and saves a real verification
+```
+
+It prints PASS/FAIL for each stage (catalogue search → SAS token → B04/B08/SCL window reads → polygon and cloud mask → NDVI) and the scene ID, acquisition date and NDVI summary. It only reports success when real band pixels were read.
+
+How access works: one SAS token for `sentinel-2-l2a` is fetched from `/api/sas/v1/token/sentinel-2-l2a`, cached until 5 minutes before its `msft:expiry`, and appended to each band URL. If blob storage answers 403 (expired or rejected signature), the token is refreshed once and the read retried. Error messages name the failing stage and HTTP status; signatures are removed from them.
 
 ## Ground-photo model
 

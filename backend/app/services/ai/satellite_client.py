@@ -19,6 +19,8 @@ Honesty rules (these are deliberate and covered by tests):
 """
 import logging
 import math
+import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -124,7 +126,150 @@ def summarize_ndvi(ndvi: np.ndarray) -> Optional[Dict[str, float]]:
     }
 
 
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+MAX_RETRY_AFTER_S = 10.0
+TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
+_SAS_QUERY_RE = re.compile(r"\?[^\s'\"]*")
+
+
+class SatelliteAccessError(Exception):
+    """A stage of the satellite pipeline failed; ``str(exc)`` is a sanitised, user-facing reason."""
+
+
+class SasTokenError(SatelliteAccessError):
+    """The token service failed. Not scene-specific, so no further scenes are tried."""
+
+
+def sanitize(text: str) -> str:
+    """Remove query strings (SAS signatures) from URLs inside an error message."""
+    return _SAS_QUERY_RE.sub("?<signature removed>", str(text))[:300]
+
+
+def _retry_after_s(resp) -> Optional[float]:
+    try:
+        value = float(resp.headers.get("Retry-After", ""))
+        return max(0.0, min(value, MAX_RETRY_AFTER_S))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def http_request(method: str, url: str, stage: str, **kwargs):
+    """HTTP call with bounded retries on transient failures only.
+
+    Retries timeouts, connection errors and HTTP 429/500/502/503/504 up to
+    SATELLITE_MAX_ATTEMPTS times with exponential backoff (Retry-After honoured, capped).
+    Any other status (400/401/403/404 ...) is returned immediately: retrying a permanent
+    error only wastes time. Raises SatelliteAccessError when every attempt failed.
+    """
+    attempts = max(1, int(settings.SATELLITE_MAX_ATTEMPTS))
+    kwargs.setdefault("timeout", settings.SATELLITE_REQUEST_TIMEOUT_S)
+    last = "no response"
+    for attempt in range(1, attempts + 1):
+        wait = settings.SATELLITE_RETRY_BACKOFF_S * (2 ** (attempt - 1))
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except requests.Timeout:
+            last = f"timed out after {kwargs['timeout']:.0f} s"
+        except requests.RequestException as exc:
+            last = f"{exc.__class__.__name__}"
+        else:
+            if resp.status_code not in RETRYABLE_STATUS:
+                return resp
+            last = f"HTTP {resp.status_code}"
+            wait = _retry_after_s(resp) if _retry_after_s(resp) is not None else wait
+        if attempt < attempts:
+            logger.info("%s: %s (attempt %d/%d), retrying in %.1fs", stage, last, attempt, attempts, wait)
+            time.sleep(wait)
+    raise SatelliteAccessError(f"{stage}: {last} after {attempts} attempt{'s' if attempts > 1 else ''}.")
+
+
+def _pc_headers() -> Dict[str, str]:
+    if settings.PLANETARY_COMPUTER_API_KEY:
+        return {"Ocp-Apim-Subscription-Key": settings.PLANETARY_COMPUTER_API_KEY}
+    return {}
+
+
 class SatelliteClient:
+    # One SAS token for the whole collection, reused until shortly before it expires.
+    _token: Optional[str] = None
+    _token_expiry: Optional[datetime] = None
+
+    @classmethod
+    def reset_token_cache(cls) -> None:
+        cls._token, cls._token_expiry = None, None
+
+    @classmethod
+    def get_sas_token(cls, force_refresh: bool = False) -> str:
+        """Returns a Planetary Computer SAS token for sentinel-2-l2a (cached).
+
+        Raises SatelliteAccessError naming the HTTP status if the token service fails.
+        """
+        now = datetime.now(timezone.utc)
+        if (not force_refresh and cls._token and cls._token_expiry
+                and cls._token_expiry - TOKEN_REFRESH_MARGIN > now):
+            return cls._token
+        stage = "Planetary Computer token service"
+        try:
+            resp = http_request("GET", f"{settings.PLANETARY_COMPUTER_SAS_URL}/{COLLECTION}", stage, headers=_pc_headers())
+        except SasTokenError:
+            raise
+        except SatelliteAccessError as exc:
+            raise SasTokenError(str(exc)) from None
+        if resp.status_code != 200:
+            raise SasTokenError(f"{stage}: HTTP {resp.status_code} (not retried; permanent error).")
+        try:
+            body = resp.json()
+        except ValueError:
+            raise SasTokenError(f"{stage}: response was not JSON.")
+        token = (body or {}).get("token")
+        if not token:
+            raise SasTokenError(f"{stage}: response contained no token.")
+        expiry = None
+        raw = (body or {}).get("msft:expiry")
+        if raw:
+            try:
+                expiry = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+            except ValueError:
+                expiry = None
+        if expiry is not None and expiry <= now:
+            raise SasTokenError(f"{stage}: returned an already-expired token.")
+        cls._token, cls._token_expiry = token, expiry or (now + timedelta(minutes=45))
+        return token
+
+    @classmethod
+    def _sign_href(cls, href: str) -> str:
+        """Append the (cached) Planetary Computer SAS token to a blob URL (raises SasTokenError)."""
+        token = cls.get_sas_token().lstrip("?")
+        sep = "&" if "?" in href else "?"
+        return f"{href}{sep}{token}"
+
+    @classmethod
+    def search_scenes(cls, footprint: "Footprint", max_cloud_cover: float, lookback_days: int) -> List[Dict[str, Any]]:
+        """STAC search for Sentinel-2 L2A items intersecting the plot geometry (least cloudy first)."""
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=lookback_days)
+        payload = {
+            "collections": [COLLECTION],
+            "intersects": footprint.geojson(),
+            "datetime": f"{start:%Y-%m-%dT00:00:00Z}/{end:%Y-%m-%dT23:59:59Z}",
+            "limit": 20,
+            "query": {"eo:cloud_cover": {"lt": max_cloud_cover}},
+        }
+        stage = "Satellite catalogue (STAC search)"
+        resp = http_request("POST", f"{settings.SENTINEL_STAC_URL}/search", stage, json=payload,
+                            headers={"Accept": "application/geo+json", **_pc_headers()})
+        if resp.status_code != 200:
+            raise SatelliteAccessError(f"{stage}: HTTP {resp.status_code} (not retried; permanent error).")
+        try:
+            features = resp.json().get("features", [])
+        except ValueError:
+            raise SatelliteAccessError(f"{stage}: response was not JSON.")
+        # least cloudy first; among equally clear scenes, the most recent first (stable sorts)
+        features.sort(key=lambda f: f.get("properties", {}).get("datetime", ""), reverse=True)
+        features.sort(key=lambda f: f.get("properties", {}).get("eo:cloud_cover", 100.0))
+        return features
 
     @classmethod
     def query_satellite_ndvi(
@@ -133,78 +278,41 @@ class SatelliteClient:
         longitude: float,
         area_hectares: Optional[float] = None,
         boundary_lonlat: Optional[List[List[float]]] = None,
-        max_cloud_cover: float = 20.0,
-        lookback_days: int = 120,
+        max_cloud_cover: Optional[float] = None,
+        lookback_days: Optional[int] = None,
     ) -> Dict[str, Any]:
         footprint = make_footprint(latitude, longitude, area_hectares, boundary_lonlat)
         bbox = footprint.bbox
+        max_cloud_cover = settings.SATELLITE_MAX_SCENE_CLOUD_PCT if max_cloud_cover is None else max_cloud_cover
+        lookback_days = settings.SATELLITE_LOOKBACK_DAYS if lookback_days is None else lookback_days
 
         if not settings.ENABLE_REAL_SATELLITE_QUERIES:
             return unavailable("Satellite queries are disabled (ENABLE_REAL_SATELLITE_QUERIES=false).", bbox)
 
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=lookback_days)
-        payload = {
-            "bbox": bbox,
-            "datetime": f"{start:%Y-%m-%d}/{end:%Y-%m-%d}",
-            "collections": [COLLECTION],
-            "limit": 10,
-            "query": {"eo:cloud_cover": {"lt": max_cloud_cover}},
-        }
-        headers = {"Accept": "application/geo+json"}
-        if settings.PLANETARY_COMPUTER_API_KEY:
-            headers["Ocp-Apim-Subscription-Key"] = settings.PLANETARY_COMPUTER_API_KEY
-
         try:
-            resp = requests.post(
-                f"{settings.SENTINEL_STAC_URL}/search",
-                json=payload,
-                headers=headers,
-                timeout=settings.SATELLITE_REQUEST_TIMEOUT_S,
-            )
-        except requests.RequestException as exc:
-            return unavailable(f"Satellite catalogue unreachable: {exc.__class__.__name__}.", bbox)
+            features = cls.search_scenes(footprint, max_cloud_cover, lookback_days)
+        except SatelliteAccessError as exc:
+            return unavailable(f"Satellite catalogue unreachable — {exc}", bbox)
 
-        if resp.status_code != 200:
-            return unavailable(f"Satellite catalogue returned HTTP {resp.status_code}.", bbox)
-
-        features = resp.json().get("features", [])
         if not features:
             return unavailable(
                 f"No Sentinel-2 L2A scene with <{max_cloud_cover:.0f}% cloud cover in the last {lookback_days} days.",
                 bbox,
             )
 
-        features.sort(key=lambda f: f.get("properties", {}).get("eo:cloud_cover", 100.0))
         reasons = []
-        for scene in features[:3]:
-            result, reason = cls._ndvi_from_scene(scene, footprint)
+        for scene in features[: max(1, settings.SATELLITE_MAX_SCENES_TRIED)]:
+            try:
+                result, reason = cls._ndvi_from_scene(scene, footprint)
+            except SasTokenError as exc:
+                return unavailable(
+                    f"Scene {scene.get('id', '?')} found, but band files could not be authorised — {exc}", bbox)
             if result is not None:
+                result["search"] = {"lookback_days": lookback_days, "max_scene_cloud_pct": max_cloud_cover,
+                                    "scenes_found": len(features)}
                 return result
             reasons.append(f"{scene.get('id', 'scene')}: {reason}")
         return unavailable("No usable Sentinel-2 observation of the plot. " + " | ".join(reasons), bbox)
-
-    @classmethod
-    def _sign_href(cls, href: str) -> Optional[str]:
-        """Append a short-lived Planetary Computer SAS token to a blob URL."""
-        try:
-            headers = {}
-            if settings.PLANETARY_COMPUTER_API_KEY:
-                headers["Ocp-Apim-Subscription-Key"] = settings.PLANETARY_COMPUTER_API_KEY
-            resp = requests.get(
-                f"{settings.PLANETARY_COMPUTER_SAS_URL}/{COLLECTION}",
-                headers=headers,
-                timeout=settings.SATELLITE_REQUEST_TIMEOUT_S,
-            )
-            if resp.status_code != 200:
-                return None
-            token = resp.json().get("token")
-            if not token:
-                return None
-            sep = "&" if "?" in href else "?"
-            return f"{href}{sep}{token}"
-        except requests.RequestException:
-            return None
 
     @classmethod
     def _read_window(cls, href: str, footprint: "Footprint", out_shape: Optional[Tuple[int, int]] = None):
@@ -218,7 +326,13 @@ class SatelliteClient:
         from rasterio.warp import transform_bounds
         from rasterio.windows import Window, from_bounds
 
-        with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", GDAL_HTTP_TIMEOUT=str(int(settings.SATELLITE_REQUEST_TIMEOUT_S))):
+        with rasterio.Env(
+            GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
+            GDAL_HTTP_TIMEOUT=str(int(settings.SATELLITE_REQUEST_TIMEOUT_S)),
+            # GDAL retries HTTP 429/502/503/504 itself; 403 (bad/expired signature) is not retried
+            GDAL_HTTP_MAX_RETRY=str(max(0, int(settings.SATELLITE_MAX_ATTEMPTS) - 1)),
+            GDAL_HTTP_RETRY_DELAY=str(settings.SATELLITE_RETRY_BACKOFF_S),
+        ):
             with rasterio.open(href) as src:
                 bounds = transform_bounds("EPSG:4326", src.crs, *footprint.bbox)
                 window = from_bounds(*bounds, transform=src.transform)
@@ -267,18 +381,43 @@ class SatelliteClient:
         if not scl_asset:
             return None, "Scene has no SCL (cloud classification) asset."
 
-        hrefs = [cls._sign_href(a["href"]) for a in (red_asset, nir_asset, scl_asset)]
-        if not all(hrefs):
-            return None, "Could not obtain a Planetary Computer access token for band files."
+        raw_hrefs = [a.get("href") for a in (red_asset, nir_asset, scl_asset)]
+        if not all(raw_hrefs):
+            return None, "Scene band assets have no download URL."
+
+        def read_bands(force_refresh: bool):
+            if force_refresh:
+                cls.get_sas_token(force_refresh=True)
+            hrefs = [cls._sign_href(h) for h in raw_hrefs]
+            red, transform, crs = cls._read_window(hrefs[0], footprint)
+            nir, _, _ = cls._read_window(hrefs[1], footprint)
+            scl_arr, _, _ = cls._read_window(hrefs[2], footprint, out_shape=red.shape)
+            return red, nir, scl_arr, transform, crs
 
         try:
-            red_dn, transform, crs = cls._read_window(hrefs[0], footprint)
-            nir_dn, _, _ = cls._read_window(hrefs[1], footprint)
-            scl, _, _ = cls._read_window(hrefs[2], footprint, out_shape=red_dn.shape)
+            try:
+                red_dn, nir_dn, scl, transform, crs = read_bands(force_refresh=False)
+            except SatelliteAccessError:
+                raise
+            except Exception as exc:
+                # An expired or rejected signature shows up as HTTP 403 from blob storage:
+                # fetch a fresh token once and retry. Anything else is reported as is.
+                if "403" in str(exc) or "AuthenticationFailed" in str(exc):
+                    logger.info("Band read got 403 for %s; refreshing SAS token once", scene.get("id"))
+                    red_dn, nir_dn, scl, transform, crs = read_bands(force_refresh=True)
+                else:
+                    raise
             inside = cls.footprint_mask(footprint, red_dn.shape, transform, crs)
+        except SasTokenError:
+            raise
+        except SatelliteAccessError as exc:
+            return None, str(exc)
         except Exception as exc:  # rasterio/GDAL raise a variety of IO errors
-            logger.warning("Band read failed for %s: %s", scene.get("id"), exc)
-            return None, f"Band read failed ({exc.__class__.__name__})."
+            logger.warning("Band read failed for %s: %s", scene.get("id"), sanitize(exc))
+            detail = sanitize(exc)
+            if "403" in detail:
+                detail = "access denied (HTTP 403) even after refreshing the token — " + detail
+            return None, f"Band read failed ({exc.__class__.__name__}: {detail})."
 
         if red_dn.shape != nir_dn.shape:
             return None, "Red and NIR windows have different shapes."
@@ -306,7 +445,9 @@ class SatelliteClient:
             "available": True,
             **stats,
             "source_label": f"Sentinel-2 L2A ({platform}) scene {scene_id}",
+            "source": "Microsoft Planetary Computer (sentinel-2-l2a)",
             "scene_id": scene_id,
+            "stac_item_url": f"{settings.SENTINEL_STAC_URL}/collections/{COLLECTION}/items/{scene_id}",
             "acquisition_date": acquired,
             "cloud_cover_pct": props.get("eo:cloud_cover"),
             "processing_baseline": baseline,

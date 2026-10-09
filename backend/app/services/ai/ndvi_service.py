@@ -73,6 +73,11 @@ class NDVIService:
                 "cloud_cover_pct": sat.get("cloud_cover_pct"),
                 "clear_pixel_pct": sat.get("clear_pixel_pct"),
                 "footprint_type": sat.get("footprint_type"),
+                "scene_id": sat.get("scene_id"),
+                "stac_item_url": sat.get("stac_item_url"),
+                "data_source": sat.get("source"),
+                "processing_baseline": sat.get("processing_baseline"),
+                "search": sat.get("search"),
                 "formula": NDVI_FORMULA,
                 "satellite_note": None,
             }
@@ -94,6 +99,7 @@ class NDVIService:
                 "acquisition_date": reported_date,
                 "formula": NDVI_FORMULA,
                 "satellite_note": f"Backend NDVI computation unavailable: {sat.get('reason')}",
+                "unavailable_reason": sat.get("reason"),
             }
 
         return {
@@ -111,4 +117,5 @@ class NDVIService:
             "acquisition_date": None,
             "formula": NDVI_FORMULA,
             "reason": sat.get("reason", "Satellite NDVI unavailable."),
+            "unavailable_reason": sat.get("reason", "Satellite NDVI unavailable."),
         }

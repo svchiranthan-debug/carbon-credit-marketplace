@@ -54,22 +54,36 @@ def test_disabled_queries_are_unavailable():
 @pytest.fixture
 def enabled(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_REAL_SATELLITE_QUERIES", True)
+    monkeypatch.setattr(sc.time, "sleep", lambda s: None)  # no real waiting between retries
+    sc.SatelliteClient.reset_token_cache()
+    yield
+    sc.SatelliteClient.reset_token_cache()
 
 
 def test_network_error_is_unavailable(enabled, monkeypatch):
     def boom(*a, **k):
         raise requests.ConnectionError("offline")
-    monkeypatch.setattr(sc.requests, "post", boom)
+    monkeypatch.setattr(sc.requests, "request", boom)
     res = sc.SatelliteClient.query_satellite_ndvi(12.5, 76.9, 1.0)
     assert res["available"] is False and "unreachable" in res["reason"]
 
 
 class _Resp:
-    def __init__(self, code, payload):
-        self.status_code, self._p = code, payload
+    def __init__(self, code, payload=None, headers=None):
+        self.status_code, self._p, self.headers = code, payload, headers or {}
 
     def json(self):
+        if self._p is None:
+            raise ValueError("no json")
         return self._p
+
+
+def _stac_only(scenes):
+    """requests.request stub: STAC search returns ``scenes``; nothing else is expected."""
+    def fake(method, url, **kw):
+        assert url.endswith("/search"), url
+        return _Resp(200, {"features": scenes})
+    return fake
 
 
 def _scene(hrefs):
@@ -101,13 +115,13 @@ def _write_tiles(tmp_path, red, nir, scl):
 
 
 def _patch_scene(monkeypatch, hrefs):
-    monkeypatch.setattr(sc.requests, "post", lambda *a, **k: _Resp(200, {"features": [_scene(hrefs)]}))
+    monkeypatch.setattr(sc.requests, "request", _stac_only([_scene(hrefs)]))
     monkeypatch.setattr(sc.SatelliteClient, "_sign_href", classmethod(lambda cls, h: h))
 
 
 def test_scene_found_but_bands_unreadable_is_unavailable_not_synthetic(enabled, monkeypatch):
     """The old code generated a random grid and labelled it REAL SATELLITE DATA here."""
-    monkeypatch.setattr(sc.requests, "post", lambda *a, **k: _Resp(200, {"features": [SCENE]}))
+    monkeypatch.setattr(sc.requests, "request", _stac_only([SCENE]))
     monkeypatch.setattr(sc.SatelliteClient, "_sign_href", classmethod(lambda cls, h: h + "?sig"))
 
     def fail(cls, href, footprint, out_shape=None):
@@ -122,7 +136,7 @@ def test_scene_found_but_bands_unreadable_is_unavailable_not_synthetic(enabled, 
 
 def test_scene_without_cloud_layer_is_not_used(enabled, monkeypatch):
     no_scl = _scene({"B04": "https://example/B04.tif", "B08": "https://example/B08.tif"})
-    monkeypatch.setattr(sc.requests, "post", lambda *a, **k: _Resp(200, {"features": [no_scl]}))
+    monkeypatch.setattr(sc.requests, "request", _stac_only([no_scl]))
     res = sc.SatelliteClient.query_satellite_ndvi(12.5, 76.9, 1.0)
     assert res["available"] is False and "SCL" in res["reason"]
 

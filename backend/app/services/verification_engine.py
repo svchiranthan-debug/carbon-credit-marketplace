@@ -230,9 +230,14 @@ class VerificationEngine:
             else "UNAVAILABLE"
         )
         result["evidence_snapshot"]["ndvi_measurement"] = {
-            k: ndvi.get(k) for k in ("provenance", "satellite_source", "acquisition_date", "cloud_cover_pct",
-                                     "valid_pixel_count", "clear_pixel_pct", "footprint_type")
+            k: ndvi.get(k) for k in ("provenance", "satellite_source", "data_source", "scene_id", "stac_item_url",
+                                     "acquisition_date", "cloud_cover_pct", "processing_baseline",
+                                     "mean_ndvi", "min_ndvi", "max_ndvi", "vegetation_coverage_pct",
+                                     "valid_pixel_count", "clear_pixel_pct", "footprint_type", "search",
+                                     "unavailable_reason")
         }
+        if not ndvi["provenance"]:
+            result["evidence_snapshot"]["ndvi_measurement"]["provenance"] = "UNAVAILABLE"
         result["evidence_snapshot"]["cv_measurement"] = {
             "model_name": cv["model_name"], "model_version": cv["model_version"],
             "class_probabilities": cv["class_probabilities"], "training_data": cv.get("training_data"),

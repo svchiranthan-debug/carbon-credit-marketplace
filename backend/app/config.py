@@ -59,7 +59,14 @@ class Settings(BaseSettings):
     # When False the backend never contacts the satellite service; NDVI must then be
     # supplied as reported evidence (value + source + acquisition date) or stays PENDING.
     ENABLE_REAL_SATELLITE_QUERIES: bool = True
-    SATELLITE_REQUEST_TIMEOUT_S: float = 10.0
+    SATELLITE_REQUEST_TIMEOUT_S: float = 20.0
+    # Scene search window and filters (documented in backend/README.md)
+    SATELLITE_LOOKBACK_DAYS: int = 120          # search scenes acquired in the last N days
+    SATELLITE_MAX_SCENE_CLOUD_PCT: float = 20.0  # scene-level eo:cloud_cover upper limit
+    SATELLITE_MAX_SCENES_TRIED: int = 3          # least-cloudy scenes tried before giving up
+    # Bounded retries for transient failures (timeouts, connection errors, HTTP 429/5xx)
+    SATELLITE_MAX_ATTEMPTS: int = 3
+    SATELLITE_RETRY_BACKOFF_S: float = 1.0       # 1 s, 2 s, 4 s ... (Retry-After honoured, capped)
 
     # --- Machine learning (ground photo classifier) ---
     ML_MODEL_PATH: str = os.path.join(BACKEND_DIR, "ml", "weights", "plantation_classifier_v2.pt")
