@@ -145,6 +145,18 @@ def sanitize(text: str) -> str:
     return _SAS_QUERY_RE.sub("?<signature removed>", str(text))[:300]
 
 
+def error_chain(exc: BaseException) -> str:
+    """Message of an exception plus its causes (GDAL puts the real HTTP/CURL error in the cause)."""
+    parts, seen, cur = [], set(), exc
+    while cur is not None and id(cur) not in seen and len(parts) < 4:
+        seen.add(id(cur))
+        msg = str(cur).strip()
+        if msg and msg not in parts and "See previous exception" not in msg:
+            parts.append(msg)
+        cur = cur.__cause__ or cur.__context__
+    return " <- ".join(parts) or exc.__class__.__name__
+
+
 def _retry_after_s(resp) -> Optional[float]:
     try:
         value = float(resp.headers.get("Retry-After", ""))
@@ -328,10 +340,14 @@ class SatelliteClient:
 
         with rasterio.Env(
             GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
-            GDAL_HTTP_TIMEOUT=str(int(settings.SATELLITE_REQUEST_TIMEOUT_S)),
-            # GDAL retries HTTP 429/502/503/504 itself; 403 (bad/expired signature) is not retried
+            # Band windows can be slow on home/college connections: allow more time than API calls.
+            GDAL_HTTP_TIMEOUT=str(int(max(60, settings.SATELLITE_REQUEST_TIMEOUT_S * 3))),
+            GDAL_HTTP_CONNECTTIMEOUT=str(int(max(20, settings.SATELLITE_REQUEST_TIMEOUT_S))),
+            # GDAL retries HTTP 429/5xx itself; 403 (bad/expired signature) is not retried
             GDAL_HTTP_MAX_RETRY=str(max(0, int(settings.SATELLITE_MAX_ATTEMPTS) - 1)),
             GDAL_HTTP_RETRY_DELAY=str(settings.SATELLITE_RETRY_BACKOFF_S),
+            CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif,.TIF,.tiff",
+            VSI_CACHE="TRUE",
         ):
             with rasterio.open(href) as src:
                 bounds = transform_bounds("EPSG:4326", src.crs, *footprint.bbox)
@@ -395,29 +411,45 @@ class SatelliteClient:
             return red, nir, scl_arr, transform, crs
 
         try:
-            try:
-                red_dn, nir_dn, scl, transform, crs = read_bands(force_refresh=False)
-            except SatelliteAccessError:
-                raise
-            except Exception as exc:
-                # An expired or rejected signature shows up as HTTP 403 from blob storage:
-                # fetch a fresh token once and retry. Anything else is reported as is.
-                if "403" in str(exc) or "AuthenticationFailed" in str(exc):
-                    logger.info("Band read got 403 for %s; refreshing SAS token once", scene.get("id"))
-                    red_dn, nir_dn, scl, transform, crs = read_bands(force_refresh=True)
-                else:
+            # Band files are read over HTTP range requests, which fail now and then on slow or
+            # busy connections ("RasterioIOError: Read failed"). Retry the whole read a bounded
+            # number of times with backoff. A 403 (expired/rejected signature) gets exactly one
+            # token refresh; a second 403 is treated as permanent.
+            attempts = max(1, int(settings.SATELLITE_MAX_ATTEMPTS))
+            refreshed = False
+            refresh_next = False
+            for attempt in range(1, attempts + 1):
+                try:
+                    red_dn, nir_dn, scl, transform, crs = read_bands(force_refresh=refresh_next)
+                    break
+                except SatelliteAccessError:
                     raise
+                except Exception as exc:
+                    text = error_chain(exc)
+                    forbidden = "403" in text or "AuthenticationFailed" in text
+                    if forbidden and refreshed:
+                        raise
+                    if attempt == attempts:
+                        raise
+                    refresh_next = forbidden
+                    refreshed = refreshed or forbidden
+                    wait = 0 if forbidden else settings.SATELLITE_RETRY_BACKOFF_S * (2 ** (attempt - 1))
+                    logger.info("Band read failed for %s (attempt %d/%d): %s; retrying in %.1fs",
+                                scene.get("id"), attempt, attempts, sanitize(text), wait)
+                    if wait:
+                        time.sleep(wait)
             inside = cls.footprint_mask(footprint, red_dn.shape, transform, crs)
         except SasTokenError:
             raise
         except SatelliteAccessError as exc:
             return None, str(exc)
         except Exception as exc:  # rasterio/GDAL raise a variety of IO errors
-            logger.warning("Band read failed for %s: %s", scene.get("id"), sanitize(exc))
-            detail = sanitize(exc)
+            detail = sanitize(error_chain(exc))
+            logger.warning("Band read failed for %s: %s", scene.get("id"), detail)
             if "403" in detail:
                 detail = "access denied (HTTP 403) even after refreshing the token — " + detail
-            return None, f"Band read failed ({exc.__class__.__name__}: {detail})."
+            n = max(1, int(settings.SATELLITE_MAX_ATTEMPTS))
+            return None, f"Band read failed after {n} attempt{'s' if n > 1 else ''} ({exc.__class__.__name__}: {detail})."
 
         if red_dn.shape != nir_dn.shape:
             return None, "Red and NIR windows have different shapes."
