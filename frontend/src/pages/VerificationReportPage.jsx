@@ -265,6 +265,14 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
             mono
           />
           <Row label="Acquired" value={v.acquisition_date} mono />
+          {v.ndvi_provenance === "SENTINEL2_COMPUTED" && (
+            <Row label="Scene" value={v.evidence_snapshot?.ndvi_measurement?.scene_id} mono />
+          )}
+          {!v.ndvi_provenance && v.evidence_snapshot?.ndvi_measurement?.unavailable_reason && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-2 break-words">
+              Why unavailable: {v.evidence_snapshot.ndvi_measurement.unavailable_reason}
+            </p>
+          )}
         </ModalityCard>
         <ModalityCard title="Ground photo (CV)" weight="0.35" score={v.cv_score} contribution={v.cv_contribution} status={v.cv_detection_status}>
           <Row label="Predicted class" value={v.ai_predicted_class} mono />
