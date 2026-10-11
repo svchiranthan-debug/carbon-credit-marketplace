@@ -326,3 +326,46 @@ def test_computed_ndvi_snapshot_records_scene(client, monkeypatch, computed_ndvi
     snap = v["evidence_snapshot"]["ndvi_measurement"]
     assert snap["provenance"] == "SENTINEL2_COMPUTED" and snap["scene_id"] == "TEST"
     assert snap["acquisition_date"] == "2026-09-01" and snap["mean_ndvi"] == 0.8
+
+
+# ---------------------------------------------------------------- intermittent band-read failures
+
+def test_intermittent_read_failure_is_retried(pc, monkeypatch, clear_tiles):
+    """'RasterioIOError: Read failed' on a flaky connection: the read is retried and succeeds."""
+    pc(FakePC(scenes=[_scene(clear_tiles)]))
+    real = sc.SatelliteClient._read_window.__func__
+    calls = {"n": 0}
+
+    def read(cls, href, footprint, out_shape=None):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            try:
+                raise OSError("CURL error: Recv failure: Connection was reset")
+            except OSError as cause:
+                raise RuntimeError("Read failed. See previous exception for details.") from cause
+        return real(cls, href.split("?")[0], footprint, out_shape)
+
+    monkeypatch.setattr(sc.SatelliteClient, "_read_window", classmethod(read))
+    res = sc.SatelliteClient.query_satellite_ndvi(LAT, LON, 1.0)
+    assert res["available"], res.get("reason")
+    assert res["mean_ndvi"] == pytest.approx(0.778, abs=1e-3)
+
+
+def test_persistent_read_failure_reports_root_cause(pc, monkeypatch, clear_tiles):
+    fake = pc(FakePC(scenes=[_scene(clear_tiles)]))
+    calls = {"n": 0}
+
+    def read(cls, href, footprint, out_shape=None):
+        calls["n"] += 1
+        try:
+            raise OSError(f"CURL error: Operation timed out for {href}")
+        except OSError as cause:
+            raise RuntimeError("Read failed. See previous exception for details.") from cause
+
+    monkeypatch.setattr(sc.SatelliteClient, "_read_window", classmethod(read))
+    res = sc.SatelliteClient.query_satellite_ndvi(LAT, LON, 1.0)
+    assert res["available"] is False
+    assert "after 3 attempts" in res["reason"] and "Operation timed out" in res["reason"]
+    assert "SECRETSIG" not in res["reason"]
+    assert calls["n"] == 3 and fake.token_calls == 1          # transient errors do not refetch tokens
+    assert fake.sleeps == [settings.SATELLITE_RETRY_BACKOFF_S, settings.SATELLITE_RETRY_BACKOFF_S * 2]
