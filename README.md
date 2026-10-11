@@ -38,6 +38,15 @@ cd frontend && npm ci && npm run dev   # http://localhost:5174
 cd mobile && npm ci && npx expo start
 ```
 
+**Port already in use / "Cannot reach the backend" / `{"detail":"Not Found"}` on `/api/health`?** Another program (often another FastAPI or Docker project) is using port 8000. Run the backend on a free port and point the web app at it:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8765          # backend
+echo VITE_API_BASE_URL=http://localhost:8765 > frontend/.env.local   # then restart: npm run dev
+```
+
+Check http://localhost:8765/api/health shows `{"status":"healthy","service":"carbon-credit-backend"}`. If `npm run dev` says port 5174 is in use, run `npm run dev -- --port 5175`. Keep the backend and the web app in **separate** terminal windows. The verification step downloads a live Sentinel-2 image and takes about a minute.
+
 The mobile app finds the backend automatically at `http://<IP of the computer running Expo>:8000/api`. To override it, set `EXPO_PUBLIC_API_URL` in `mobile/.env` (see `mobile/.env.example`). The Android emulator falls back to `10.0.2.2`, and the iOS simulator and web fall back to `localhost`. Start uvicorn with `--host 0.0.0.0` so the phone can reach it.
 
 Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo` (plus `farmer2@…`, `buyer2@…`), all `Demo@123`. Sign in from the landing page portal cards (Farmer / Buyer / Auditor). Anyone can sign up as a farmer, buyer or auditor; the admin signs in through the Auditor portal. An admin can also create auditor accounts (Admin dashboard → "Create auditor account").

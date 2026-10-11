@@ -353,7 +353,7 @@ export default function CreditDetailsPage({ creditId, setCurrentView }) {
           </div>
 
           <div>
-            <span className="text-slate-400 block text-[11px]">Custodian</span>
+            <span className="text-slate-400 block text-[11px]">Issued by (farmer)</span>
             <span className="text-slate-700 font-medium truncate block">
               {credit.farmer_name || "Plantation Custodian"}
             </span>
