@@ -64,6 +64,9 @@ def get_my_credits(current_user: User = Depends(get_current_user), db: Session =
         query = query.filter(Credit.plantation_id.in_(plantation_ids) | (Credit.owner_id == current_user.id))
     elif current_user.role == UserRole.BUYER.value:
         query = query.filter(Credit.owner_id == current_user.id)
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Credit holdings are visible to farmers and buyers only.")
     credits = query.order_by(Credit.created_at.desc()).all()
     return [hydrate_credit(c, db) for c in credits]
 

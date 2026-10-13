@@ -331,6 +331,9 @@ class VerificationRunRequest(BaseModel):
 
 class VerificationResponse(SignedImageMixin):
     id: Optional[str] = None            # None when no verification has been run yet (preview)
+    # Credit issued from this plantation (issuance only; ownership/sales are not included)
+    issued_credit_id: Optional[str] = None
+    issued_credit_tco2e: Optional[float] = None
     is_persisted: bool = True
     plantation_id: int
     plantation_status: Optional[str] = None
@@ -526,8 +529,8 @@ class AdminDecisionRequest(BaseModel):
         return v
 
 class AdminMetricsResponse(BaseModel):
+    """Auditor/admin overview. Verification-side figures only (no buyer or sales data)."""
     total_farmers: int
-    total_buyers: int
     total_plantations: int
     pending_verifications: int
     approved_plantations: int
@@ -535,8 +538,6 @@ class AdminMetricsResponse(BaseModel):
     rejected_plantations: int
     credits_issued_count: int
     total_carbon_credits_tco2e: float
-    total_transactions_count: int
-    total_transaction_volume_inr: float
 
 class AuditLogResponse(BaseModel):
     id: int

@@ -135,7 +135,7 @@ export default function Sidebar({ currentView, setCurrentView, isOpen, onClose }
               </>
             )}
 
-            {/* ADMIN / AUDITOR: Overview, Verification Queue, Marketplace, Logout */}
+            {/* ADMIN / AUDITOR: Overview, Verification Queue (no marketplace or buyer pages) */}
             {isAdmin && (
               <>
                 <button
@@ -154,23 +154,6 @@ export default function Sidebar({ currentView, setCurrentView, isOpen, onClose }
                   <span>Verification Queue</span>
                 </button>
 
-                <button
-                  onClick={() => handleNav("marketplace")}
-                  className={navItemClass(currentView === "marketplace")}
-                >
-                  <ShoppingBag className="w-4 h-4 text-slate-500" />
-                  <span>Marketplace</span>
-                </button>
-
-                {role === "ADMIN" && (
-                  <button
-                    onClick={() => handleNav("transactions")}
-                    className={navItemClass(currentView === "transactions")}
-                  >
-                    <FileText className="w-4 h-4 text-slate-500" />
-                    <span>Audit Logs</span>
-                  </button>
-                )}
               </>
             )}
           </div>
