@@ -39,7 +39,8 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
         api.getAuditLogs()
       ]);
       setMetrics(met);
-      setVerificationQueue(queue || []);
+      // Plots whose credit is already issued are final: they need no auditor sign-off.
+      setVerificationQueue((queue || []).filter((item) => !item.issued_credit_id));
       setAuditLogs(logs || []);
     } catch (err) {
       setLoadError(err.message);
@@ -214,8 +215,8 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
                         </button>
                         <button
                           onClick={() => setSelectedVerification(item)}
-                          disabled={!item.id}
-                          title={item.id ? "" : "No verification has been run yet"}
+                          disabled={!item.id || Boolean(item.issued_credit_id)}
+                          title={!item.id ? "No verification has been run yet" : item.issued_credit_id ? "Decision is final: a credit has been issued" : ""}
                           className="px-2.5 py-1 bg-forest-800 text-white rounded hover:bg-forest-900 font-semibold disabled:opacity-40"
                         >
                           Review
