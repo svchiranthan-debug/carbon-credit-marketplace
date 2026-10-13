@@ -1,14 +1,13 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from ..database import get_db
 from ..models.user import User, UserRole
 from ..models.plantation import Plantation, PlantationStatus
 from ..models.verification import Verification, VerificationDecision
 from ..models.credit import Credit
-from ..models.transaction import Transaction
 from ..models.audit_log import AuditLog
 from ..schemas.schemas import AdminMetricsResponse, AdminDecisionRequest, VerificationResponse, AuditLogResponse
 from ..services.carbon_engine import CarbonEngine, CreditIssuanceError
@@ -16,6 +15,8 @@ from ..services.verification_store import (
     DECISION_TO_PLANTATION_STATUS, PreviewVerification, hydrate, latest_verification,
 )
 from ..core.security import require_role
+
+MARKETPLACE_ACTIONS = ("CREDIT_PURCHASE_COMPLETED", "CREDIT_RETIRED")
 
 router = APIRouter(prefix="/admin", tags=["Admin Dashboard & Management"])
 
@@ -25,7 +26,6 @@ def get_admin_metrics(
     db: Session = Depends(get_db)
 ):
     total_farmers = db.query(User).filter(User.role == UserRole.FARMER.value).count()
-    total_buyers = db.query(User).filter(User.role == UserRole.BUYER.value).count()
     total_plantations = db.query(Plantation).count()
     
     pending_verifications = db.query(Plantation).filter(
@@ -38,13 +38,10 @@ def get_admin_metrics(
     
     credits_issued_count = db.query(Credit).count()
     total_credits_vol = db.query(func.sum(Credit.carbon_quantity_tco2e)).scalar() or 0.0
-    
-    total_txns = db.query(Transaction).count()
-    total_txn_amount = db.query(func.sum(Transaction.total_amount)).scalar() or 0.0
+
     
     return {
         "total_farmers": total_farmers,
-        "total_buyers": total_buyers,
         "total_plantations": total_plantations,
         "pending_verifications": pending_verifications,
         "approved_plantations": approved_plantations,
@@ -52,8 +49,6 @@ def get_admin_metrics(
         "rejected_plantations": rejected_plantations,
         "credits_issued_count": credits_issued_count,
         "total_carbon_credits_tco2e": round(float(total_credits_vol), 1),
-        "total_transactions_count": total_txns,
-        "total_transaction_volume_inr": round(float(total_txn_amount), 2)
     }
 
 @router.get("/verifications", response_model=List[VerificationResponse])
@@ -151,4 +146,9 @@ def get_audit_logs(
     current_user: User = Depends(require_role([UserRole.ADMIN.value, UserRole.AUDITOR.value])),
     db: Session = Depends(get_db)
 ):
-    return db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(100).all()
+    # The auditor portal covers verification only: buyer accounts and marketplace activity
+    # (purchases, retirements) are not shown here.
+    return (db.query(AuditLog)
+            .filter(or_(AuditLog.user_role.is_(None), AuditLog.user_role != UserRole.BUYER.value))
+            .filter(AuditLog.action.notin_(MARKETPLACE_ACTIONS))
+            .order_by(AuditLog.timestamp.desc()).limit(100).all())

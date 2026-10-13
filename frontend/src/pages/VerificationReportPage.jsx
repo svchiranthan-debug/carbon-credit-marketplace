@@ -86,7 +86,8 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
         api.getPlantation(plantationId),
         api.getPlantationVerification(plantationId),
         api.getVerificationHistory(plantationId),
-        user?.role === "BUYER" ? api.listMarketplaceCredits({ status: "ALL" }) : api.getMyCredits(),
+        // Auditors see whether a credit was issued (from the verification), never its sale or owner.
+        isAuditor ? Promise.resolve([]) : user?.role === "BUYER" ? api.listMarketplaceCredits({ status: "ALL" }) : api.getMyCredits(),
       ]);
       setPlantation(pl);
       setVerification(ver);
@@ -150,7 +151,7 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
   const v = verification;
   const scored = v.overall_score !== null && v.overall_score !== undefined;
   const isLatest = v.is_persisted !== false && history.length > 0 && history[0].id === v.id;
-  const evidenceLocked = Boolean(credit);
+  const evidenceLocked = Boolean(credit) || Boolean(v.issued_credit_id);
   const missingNow = v.current_missing_evidence || [];
   const ndvi = v.mean_ndvi ?? v.ndvi_value;
 
@@ -309,7 +310,11 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
       <section className="bg-white border border-slate-200 rounded p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Carbon credit</h3>
-          {credit ? (
+          {isAuditor && v.issued_credit_id ? (
+            <p className="mt-1">
+              Issued: <span className="font-mono font-bold">{v.issued_credit_id}</span> • {v.issued_credit_tco2e} tCO₂e
+            </p>
+          ) : credit ? (
             <p className="mt-1">
               <span className="font-mono font-bold">{credit.id}</span> • {credit.carbon_quantity_tco2e} tCO₂e • {credit.status}
               {" "}• chain: {credit.blockchain_status || "NOT_RECORDED"}
@@ -322,7 +327,7 @@ export default function VerificationReportPage({ plantationId, setCurrentView, s
             </p>
           )}
         </div>
-        {credit ? (
+        {isAuditor && v.issued_credit_id ? null : credit ? (
           <button
             onClick={() => { setSelectedCreditId(credit.id); setCurrentView("credit_details"); }}
             className="px-3 py-2 border border-slate-300 rounded inline-flex items-center gap-1"

@@ -11,7 +11,6 @@ import {
   Trees, 
   Clock, 
   Award, 
-  ShoppingBag, 
   RefreshCw, 
   CheckCircle, 
   
@@ -105,41 +104,41 @@ export default function AdminDashboard({ setCurrentView, setSelectedPlantationId
         </div>
       </div>
 
-      {/* Metrics Row (Total Farmers, Plantations, Pending Verifications, Credits Issued, Credits Sold) */}
+      {/* Metrics Row: verification-side figures only (no buyer or sales data) */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <MetricCard
           title="Total Farmers"
-          value={metrics?.total_farmers ?? 2}
+          value={metrics?.total_farmers ?? "—"}
           subtitle="Registered custodians"
           icon={Users}
           color="forest"
         />
         <MetricCard
           title="Plantations"
-          value={metrics?.total_plantations ?? 4}
+          value={metrics?.total_plantations ?? "—"}
           subtitle="Documented plots"
           icon={Trees}
           color="forest"
         />
         <MetricCard
           title="Pending Verifications"
-          value={metrics?.pending_verifications ?? 1}
+          value={metrics?.pending_verifications ?? "—"}
           subtitle="Awaiting audit review"
           icon={Clock}
           color="amber"
         />
         <MetricCard
-          title="Credits Issued"
-          value={`${metrics?.credits_issued ?? 2}`}
-          subtitle="Issued certificates"
-          icon={Award}
+          title="Verified Plantations"
+          value={metrics?.approved_plantations ?? "—"}
+          subtitle={metrics ? `${metrics.review_plantations} in review · ${metrics.rejected_plantations} rejected` : "—"}
+          icon={CheckCircle}
           color="forest"
         />
         <MetricCard
-          title="Credits Sold"
-          value={`${metrics?.credits_sold ?? 1}`}
-          subtitle="Retired by buyers"
-          icon={ShoppingBag}
+          title="Credits Issued"
+          value={metrics?.credits_issued_count ?? "—"}
+          subtitle={metrics ? `${metrics.total_carbon_credits_tco2e} tCO₂e from approved plots` : "—"}
+          icon={Award}
           color="slate"
         />
       </div>

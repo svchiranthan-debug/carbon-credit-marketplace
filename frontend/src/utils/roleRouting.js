@@ -36,10 +36,13 @@ export function getRoleDashboardView(role) {
  * Checks whether a given view is allowed for the user's role and authentication status.
  */
 export function isRouteAllowed(view, role, isAuthenticated) {
-  // 1. Public views always accessible
+  const normalizedRole = role ? String(role).trim().toUpperCase() : null;
+  const isAuditPortal = normalizedRole === UserRole.AUDITOR || normalizedRole === UserRole.ADMIN;
+
+  // 1. Public views always accessible (auditors/admins do not use the buyer marketplace)
   const publicViews = ["landing", "login", "register", "marketplace", "credit_details"];
   if (publicViews.includes(view)) {
-    return true;
+    return !(isAuthenticated && isAuditPortal && (view === "marketplace" || view === "credit_details"));
   }
 
   // 2. Protected views require active authentication and valid role
@@ -76,13 +79,11 @@ export function isRouteAllowed(view, role, isAuthenticated) {
 
   // 5. Auditor & Admin Routes
   if (normalized === UserRole.AUDITOR || normalized === UserRole.ADMIN) {
+    // Verification only: no marketplace, credit-ownership or buyer transaction pages
     const auditorViews = [
       "admin_dashboard",
       "auditor_queue",
-      "verification_report",
-      "marketplace",
-      "credit_details",
-      "transactions"
+      "verification_report"
     ];
     return auditorViews.includes(view);
   }

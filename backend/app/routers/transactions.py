@@ -237,6 +237,10 @@ def list_transactions(current_user: User = Depends(get_current_user), db: Sessio
         query = query.filter(Transaction.buyer_id == current_user.id)
     elif current_user.role == UserRole.FARMER.value:
         query = query.filter(Transaction.seller_id == current_user.id)
+    else:
+        # Auditors/admins verify plantations; buyer purchases are not part of their portal.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Transactions are visible to the buyer and the selling farmer only.")
     txns = query.order_by(Transaction.timestamp.desc()).all()
 
     for t in txns:

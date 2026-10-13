@@ -72,6 +72,9 @@ def hydrate(verification: Any, plantation: Optional[Plantation]) -> Any:
         verification.tree_species = plantation.tree_species
         verification.plantation_status = plantation.status
         verification.image_url = plantation.image_url
+        issued = plantation.credits[0] if getattr(plantation, "credits", None) else None
+        verification.issued_credit_id = issued.id if issued else None
+        verification.issued_credit_tco2e = issued.carbon_quantity_tco2e if issued else None
         audit = VerificationEngine.check_evidence_completeness(plantation)
         stored = getattr(verification, "evidence_status", None)
         if not isinstance(stored, dict):
