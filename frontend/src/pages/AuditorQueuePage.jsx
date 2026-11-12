@@ -1,3 +1,4 @@
+import BackendImage from "../components/BackendImage";
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api, { getImageUrl } from "../services/api";
@@ -123,7 +124,7 @@ export default function AuditorQueuePage({ setCurrentView, setSelectedPlantation
                   <div className="flex items-start gap-4 flex-1">
                     <div className="w-24 h-24 rounded bg-slate-100 border border-slate-200 overflow-hidden flex-shrink-0 flex items-center justify-center">
                       {hasGroundImage ? (
-                        <img
+                        <BackendImage
                           src={getImageUrl(item.image_url)}
                           alt={item.plantation_name || "Plot"}
                           className="w-full h-full object-cover"

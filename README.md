@@ -59,6 +59,19 @@ The backend cannot run on Vercel: PyTorch and rasterio exceed its function size 
 2. **Web app on Vercel.** Add New → Project → import this repo. Root Directory `frontend`, Framework Vite, environment variable `VITE_API_BASE_URL=https://<service>.onrender.com`. Deploy, then set Render's `CORS_ORIGINS` to the Vercel URL.
 3. **Android APK**: see below, using `https://<service>.onrender.com/api`.
 
+### Free option: backend on your laptop through an ngrok tunnel
+
+Keeps the real database and photos on the laptop; the site and app work while the laptop, the backend and the tunnel are running. ngrok's free plan gives one fixed `https://<name>.ngrok-free.app` address (about 20k requests a month). The web app and mobile app send the `ngrok-skip-browser-warning` header on every request, including photo loads, so ngrok's browser warning page never gets in the way.
+
+```bash
+# terminal 1
+cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8765
+# terminal 2 (after installing ngrok and adding your authtoken)
+ngrok http --url=https://<your-dev-domain>.ngrok-free.app 8765
+```
+
+Use `https://<your-dev-domain>.ngrok-free.app` as `VITE_API_BASE_URL` on Vercel and `https://<your-dev-domain>.ngrok-free.app/api` as `EXPO_PUBLIC_API_URL` for the APK.
+
 ### Android APK
 
 Built in the cloud with EAS (free Expo account; no Android Studio needed). The backend URL is baked in at build time, so deploy the backend first and use its **https** address (release builds block plain `http://`).

@@ -1,3 +1,4 @@
+import BackendImage from "./BackendImage";
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { AlertCircle, Check, FileImage, Loader2, RotateCcw, X } from "lucide-react";
 import api, { getImageUrl } from "../services/api";
@@ -172,7 +173,7 @@ const PhotoEvidenceUploader = forwardRef(function PhotoEvidenceUploader({ planta
             <li key={it.key} className="border border-slate-200 rounded overflow-hidden bg-white">
               <div className="relative h-24 bg-slate-100">
                 {it.preview ? (
-                  <img src={it.preview} alt={it.name || "Ground photo"} className="w-full h-full object-cover" />
+                  <BackendImage src={it.preview} alt={it.name || "Ground photo"} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-slate-400"><FileImage className="w-6 h-6" /></div>
                 )}
