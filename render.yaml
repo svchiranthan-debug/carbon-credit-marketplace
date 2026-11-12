@@ -1,0 +1,28 @@
+# Render Blueprint for the backend (the web app goes on Vercel; see README "Deploying").
+# Needs a paid instance (Starter or above): the persistent disk keeps the SQLite database and
+# uploaded photos across restarts and redeploys.
+services:
+  - type: web
+    name: carbon-credit-backend
+    runtime: python
+    rootDir: backend
+    plan: starter
+    # CPU-only PyTorch: the default Linux wheel pulls several GB of CUDA libraries.
+    buildCommand: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite:////var/data/carbon_marketplace.db
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: CORS_ORIGINS
+        sync: false   # set to the Vercel URL, e.g. https://carbon-credit-marketplace.vercel.app
