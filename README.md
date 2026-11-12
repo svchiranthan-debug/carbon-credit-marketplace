@@ -51,6 +51,26 @@ The mobile app finds the backend automatically at `http://<IP of the computer ru
 
 Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo` (plus `farmer2@…`, `buyer2@…`), all `Demo@123`. Sign in from the landing page portal cards (Farmer / Buyer / Auditor). Anyone can sign up as a farmer, buyer or auditor; the admin signs in through the Auditor portal. An admin can also create auditor accounts (Admin dashboard → "Create auditor account").
 
+### Android APK
+
+Built in the cloud with EAS (free Expo account; no Android Studio needed). The backend URL is baked in at build time, so deploy the backend first and use its **https** address (release builds block plain `http://`).
+
+```bash
+cd mobile
+npm install -g eas-cli
+eas login
+eas build -p android --profile preview      # first run: answer "yes" to create the project and keystore
+```
+
+Before building, set the backend URL in `mobile/eas.json` under the `preview` profile (a local `.env` is git-ignored and is not uploaded to the build server):
+
+```json
+"preview": { "distribution": "internal", "android": { "buildType": "apk" },
+             "env": { "EXPO_PUBLIC_API_URL": "https://<your-backend-host>/api" } }
+```
+
+When the build finishes (about 10–20 minutes) EAS prints a download link and QR code for the `.apk`. Install it on a phone (allow "install unknown apps"). Rebuild whenever the backend URL changes; bump `android.versionCode` in `app.json` for each new APK you hand out. `--profile production` makes a Play Store `.aab` instead.
+
 ---
 
 ## How it works
