@@ -1,3 +1,4 @@
+import BackendImage from "../components/BackendImage";
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api, { getImageUrl } from "../services/api";
@@ -227,7 +228,7 @@ export default function CreditDetailsPage({ creditId, setCurrentView }) {
       {/* Plantation Ground Photo Preview */}
       <div className="w-full h-48 bg-slate-100 rounded border border-slate-200 overflow-hidden relative flex items-center justify-center">
         {credit.image_url ? (
-          <img
+          <BackendImage
             src={getImageUrl(credit.image_url)}
             alt={credit.plantation_name || "Plantation"}
             className="w-full h-full object-cover"

@@ -47,6 +47,10 @@ function formatErrorDetail(detail: any, status: number): string {
   return JSON.stringify(detail);
 }
 
+// Sent with every backend request and photo load. ngrok's free plan answers browser-like
+// requests with an HTML warning page unless this header is present; other hosts ignore it.
+export const TUNNEL_HEADERS: Record<string, string> = { "ngrok-skip-browser-warning": "1" };
+
 export const API_BASE_URL = resolveApiBaseUrl();
 
 class MobileApiClient {
@@ -62,6 +66,7 @@ class MobileApiClient {
 
   private async request(endpoint: string, options: RequestInit = {}) {
     const headers: Record<string, string> = {
+      ...TUNNEL_HEADERS,
       ...(options.headers as Record<string, string> || {})
     };
 

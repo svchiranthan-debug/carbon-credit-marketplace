@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
-import { api, API_BASE_URL } from "../services/api";
+import { api, API_BASE_URL, TUNNEL_HEADERS } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import CameraCaptureModal from "../components/CameraCaptureModal";
 import PlantationMapModal from "../components/PlantationMapModal";
@@ -597,7 +597,8 @@ export default function FarmerScreen() {
                   source={{
                     uri: selectedPlantation.image_url.startsWith("http")
                       ? selectedPlantation.image_url
-                      : `${API_BASE_URL.replace("/api", "")}${selectedPlantation.image_url}`
+                      : `${API_BASE_URL.replace("/api", "")}${selectedPlantation.image_url}`,
+                    headers: TUNNEL_HEADERS
                   }}
                   style={styles.evidenceDisplayImage}
                   resizeMode="cover"

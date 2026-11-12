@@ -1,5 +1,9 @@
 // Backend origin. Override with VITE_API_BASE_URL in frontend/.env (e.g. http://192.168.1.20:8000).
 export const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
+
+// Sent on every backend request. ngrok's free plan answers browser requests with an HTML
+// warning page unless this header is present; other hosts ignore it.
+export const TUNNEL_HEADERS = { "ngrok-skip-browser-warning": "1" };
 const API_BASE = `${API_ORIGIN}/api`;
 
 /** Turns FastAPI error bodies (string or 422 validation list) into one readable message. */
@@ -42,6 +46,7 @@ class ApiService {
   async request(endpoint, options = {}) {
     const token = this.getToken();
     const headers = {
+      ...TUNNEL_HEADERS,
       ...options.headers,
     };
 

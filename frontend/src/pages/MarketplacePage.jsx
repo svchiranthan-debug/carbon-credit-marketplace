@@ -1,3 +1,4 @@
+import BackendImage from "../components/BackendImage";
 import React, { useState, useEffect } from "react";
 import api, { getImageUrl } from "../services/api";
 import StatusBadge from "../components/StatusBadge";
@@ -138,7 +139,7 @@ export default function MarketplacePage({ setCurrentView, setSelectedCreditId })
                     {/* Top: Plantation Imagery */}
                     <div className="w-full h-44 bg-slate-100 relative border-b border-slate-100 flex items-center justify-center overflow-hidden">
                       {hasImage ? (
-                        <img
+                        <BackendImage
                           src={getImageUrl(credit.image_url)}
                           alt={credit.plantation_name || "Plantation"}
                           className="w-full h-full object-cover"

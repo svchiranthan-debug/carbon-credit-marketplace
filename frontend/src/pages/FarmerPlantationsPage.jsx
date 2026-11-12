@@ -1,3 +1,4 @@
+import BackendImage from "../components/BackendImage";
 import React, { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import api, { getImageUrl } from "../services/api";
@@ -118,7 +119,7 @@ export default function FarmerPlantationsPage({ setCurrentView, setSelectedPlant
                   {/* Top Thumbnail or Ground Image Not Provided */}
                   <div className="w-full h-40 bg-slate-100 relative border-b border-slate-100 flex items-center justify-center overflow-hidden">
                     {hasGroundImage ? (
-                      <img
+                      <BackendImage
                         src={getImageUrl(p.image_url)}
                         alt={p.name}
                         className="w-full h-full object-cover"

@@ -1,3 +1,4 @@
+import BackendImage from "./BackendImage";
 import React, { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, FileImage, X } from "lucide-react";
 import api, { getImageUrl } from "../services/api";
@@ -99,7 +100,7 @@ export default function PhotoGallery({ plantationId, verification, refreshKey })
               <button type="button" onClick={() => setOpen(i)}
                       className={`w-full text-left border rounded overflow-hidden bg-white hover:border-slate-400 ${warnings.length ? "border-amber-300" : "border-slate-200"}`}>
                 <div className="h-24 bg-slate-100">
-                  <img src={getImageUrl(p.url)} alt={`Ground photo ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                  <BackendImage src={getImageUrl(p.url)} alt={`Ground photo ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
                 </div>
                 <div className="p-1.5 text-[10px] space-y-0.5">
                   <p className="font-semibold text-slate-800">#{p.id} · {p.predicted_class ? CLASS_LABEL[p.predicted_class] : "not classified yet"}</p>
@@ -120,7 +121,7 @@ export default function PhotoGallery({ plantationId, verification, refreshKey })
              onClick={(e) => e.target === e.currentTarget && setOpen(null)}>
           <div className="bg-white rounded-lg w-full max-w-5xl max-h-[95vh] overflow-y-auto grid md:grid-cols-3">
             <div className="relative md:col-span-2 bg-black flex items-center justify-center min-h-[40vh]">
-              <img src={getImageUrl(current.url)} alt={`Ground photo #${current.id}`} className="max-h-[80vh] w-full object-contain" />
+              <BackendImage src={getImageUrl(current.url)} alt={`Ground photo #${current.id}`} className="max-h-[80vh] w-full object-contain" />
               {photos.length > 1 && (
                 <>
                   <button type="button" onClick={() => step(-1)} aria-label="Previous photo"
