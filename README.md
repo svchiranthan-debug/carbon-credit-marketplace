@@ -51,6 +51,14 @@ The mobile app finds the backend automatically at `http://<IP of the computer ru
 
 Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo` (plus `farmer2@…`, `buyer2@…`), all `Demo@123`. Sign in from the landing page portal cards (Farmer / Buyer / Auditor). Anyone can sign up as a farmer, buyer or auditor; the admin signs in through the Auditor portal. An admin can also create auditor accounts (Admin dashboard → "Create auditor account").
 
+### Deploying (web on Vercel, backend on Render)
+
+The backend cannot run on Vercel: PyTorch and rasterio exceed its function size limit, its filesystem does not keep the SQLite database or uploaded photos, and a satellite verification takes about a minute.
+
+1. **Backend on Render.** New → Blueprint → pick this repo; `render.yaml` sets everything up (CPU-only PyTorch, a 1 GB disk at `/var/data` for the database and photos, a generated `SECRET_KEY`). Enter `CORS_ORIGINS` when asked (use `*` until the Vercel URL exists, then change it). After the first deploy, open the service's Shell and run `python seed_data.py` once to create the demo accounts. Check `https://<service>.onrender.com/api/health`.
+2. **Web app on Vercel.** Add New → Project → import this repo. Root Directory `frontend`, Framework Vite, environment variable `VITE_API_BASE_URL=https://<service>.onrender.com`. Deploy, then set Render's `CORS_ORIGINS` to the Vercel URL.
+3. **Android APK**: see below, using `https://<service>.onrender.com/api`.
+
 ### Android APK
 
 Built in the cloud with EAS (free Expo account; no Android Studio needed). The backend URL is baked in at build time, so deploy the backend first and use its **https** address (release builds block plain `http://`).
