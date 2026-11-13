@@ -79,6 +79,18 @@ Scene `S2C_MSIL2A_20260927T051651_R062_T43PEQ_20260927T101415`, acquired 2026-09
 
 Farmers can upload up to 10 photos per plot (web: multi-select with per-photo status, remove and retry; phone: multi-select from the gallery or several camera shots). The auditor sees every photo in a gallery with full-size view, per-photo prediction and confidence, upload time, EXIF provenance (unverified) and warnings for invalid, duplicate, low-confidence and non-plantation photos. CV score = lower median of unique photos; conflicting or low-confidence photos cap the decision at REVIEW. Photos are served only through signed links.
 
+## Deployment (2026-11-13, PRs #11–#13)
+
+| Part | Where | Checked |
+|---|---|---|
+| Web app | Vercel: https://carbon-credit-marketplace.vercel.app (root `frontend`, `VITE_API_BASE_URL` = ngrok address) | Live site tested in a browser for farmer, buyer and auditor: dashboards, plot reports with photos, carbon assets, transactions, marketplace; no console errors |
+| Backend | Project laptop, exposed with a free ngrok tunnel (`https://elsewhere-pasty-grip.ngrok-free.dev`) | Health, data and photos load through the tunnel from the Vercel origin; auditor still gets 403 on `/transactions` and `/marketplace/my-credits` |
+| Android app | EAS internal-distribution APK, build `81222013` (`@samarthkumble/carbon-credit-marketplace`) | Build finished; backend URL set in `mobile/eas.json` |
+
+Before deploying: backend tests 138 passed / 3 skipped (network and Ganache), web build and lint clean, mobile `tsc` clean. The ngrok browser-warning fix was tested against a proxy that blocks browser requests without the skip header.
+
+Limitation: the live site and APK work only while the laptop, the backend and ngrok are running. `render.yaml` is ready for an always-on paid backend on Render.
+
 ## Open issues
 
 
