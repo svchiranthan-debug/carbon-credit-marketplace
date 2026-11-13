@@ -13,6 +13,16 @@
 
 Current component-by-component status, including known gaps: **[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)**.
 
+## Live demo
+
+| | Link |
+|---|---|
+| Web app (Vercel) | https://carbon-credit-marketplace.vercel.app |
+| Android app (APK, Expo internal distribution) | https://expo.dev/accounts/samarthkumble/projects/carbon-credit-marketplace/builds/81222013-5c67-42e0-ba6c-b11de4d49388 |
+| Backend API (laptop via ngrok) | https://elsewhere-pasty-grip.ngrok-free.dev/api/health |
+
+The backend runs on the project laptop and is exposed through a free ngrok tunnel, so the live site and app work **only while that laptop is on with the backend and ngrok running** (see [Hosting](#hosting-what-is-live-now)). Demo accounts are listed under Quick start; all use `Demo@123`.
+
 ---
 
 ## Quick start
@@ -51,26 +61,27 @@ The mobile app finds the backend automatically at `http://<IP of the computer ru
 
 Demo accounts: `farmer@agrocarbon.demo`, `buyer@ecocorp.demo`, `auditor@agrocarbon.demo`, `admin@agrocarbon.demo` (plus `farmer2@…`, `buyer2@…`), all `Demo@123`. Sign in from the landing page portal cards (Farmer / Buyer / Auditor). Anyone can sign up as a farmer, buyer or auditor; the admin signs in through the Auditor portal. An admin can also create auditor accounts (Admin dashboard → "Create auditor account").
 
-### Deploying (web on Vercel, backend on Render)
+### Hosting (what is live now)
 
-The backend cannot run on Vercel: PyTorch and rasterio exceed its function size limit, its filesystem does not keep the SQLite database or uploaded photos, and a satellite verification takes about a minute.
+The **web app is on Vercel** (project `carbon-credit-marketplace`, root directory `frontend`, env `VITE_API_BASE_URL=https://elsewhere-pasty-grip.ngrok-free.dev`; it redeploys on every push to the fork it is linked to). The **backend stays on the laptop** and is reached through **ngrok's free plan**, which gives one fixed address and about 20k requests a month. This keeps the real database and photos and costs nothing.
 
-1. **Backend on Render.** New → Blueprint → pick this repo; `render.yaml` sets everything up (CPU-only PyTorch, a 1 GB disk at `/var/data` for the database and photos, a generated `SECRET_KEY`). Enter `CORS_ORIGINS` when asked (use `*` until the Vercel URL exists, then change it). After the first deploy, open the service's Shell and run `python seed_data.py` once to create the demo accounts. Check `https://<service>.onrender.com/api/health`.
-2. **Web app on Vercel.** Add New → Project → import this repo. Root Directory `frontend`, Framework Vite, environment variable `VITE_API_BASE_URL=https://<service>.onrender.com`. Deploy, then set Render's `CORS_ORIGINS` to the Vercel URL.
-3. **Android APK**: see below, using `https://<service>.onrender.com/api`.
+The web and mobile apps send the `ngrok-skip-browser-warning` header on every request, including photo loads (`frontend/src/components/BackendImage.jsx`), so ngrok's browser warning page never gets in the way.
 
-### Free option: backend on your laptop through an ngrok tunnel
+Before a demo, on the laptop (Windows, from the project folder):
 
-Keeps the real database and photos on the laptop; the site and app work while the laptop, the backend and the tunnel are running. ngrok's free plan gives one fixed `https://<name>.ngrok-free.app` address (about 20k requests a month). The web app and mobile app send the `ngrok-skip-browser-warning` header on every request, including photo loads, so ngrok's browser warning page never gets in the way.
-
-```bash
-# terminal 1
-cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8765
-# terminal 2 (after installing ngrok and adding your authtoken)
-ngrok http --url=https://<your-dev-domain>.ngrok-free.app 8765
+```powershell
+# window 1: backend (use the project's virtual environment)
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8765
+# window 2: tunnel (ngrok installed from the Microsoft Store, authtoken added once)
+ngrok http --url=https://elsewhere-pasty-grip.ngrok-free.dev 8765
 ```
 
-Use `https://<your-dev-domain>.ngrok-free.app` as `VITE_API_BASE_URL` on Vercel and `https://<your-dev-domain>.ngrok-free.app/api` as `EXPO_PUBLIC_API_URL` for the APK.
+Check `https://elsewhere-pasty-grip.ngrok-free.dev/api/health` returns `healthy`.
+
+**Why not Vercel for the backend?** PyTorch and rasterio exceed Vercel's function size limit, its filesystem does not keep the SQLite database or uploaded photos, and a satellite verification takes about a minute. Free cloud hosts with enough memory and a persistent disk were not available without a card (Hugging Face Docker Spaces need PRO since July 2026; Render/Railway/Koyeb free tiers have 512 MB and no persistent disk).
+
+**Paid alternative (always on): Render.** `render.yaml` defines the backend (CPU-only PyTorch, a 1 GB disk at `/var/data`, generated `SECRET_KEY`; Starter plan, about US$7/month). New → Blueprint → pick the repo, set `CORS_ORIGINS`, run `python seed_data.py` once from the service Shell, then point `VITE_API_BASE_URL` and `EXPO_PUBLIC_API_URL` at `https://<service>.onrender.com`.
 
 ### Android APK
 
@@ -78,6 +89,7 @@ Built in the cloud with EAS (free Expo account; no Android Studio needed). The b
 
 ```bash
 cd mobile
+npm ci
 npm install -g eas-cli
 eas login
 eas build -p android --profile preview      # first run: answer "yes" to create the project and keystore
@@ -90,7 +102,9 @@ Before building, set the backend URL in `mobile/eas.json` under the `preview` pr
              "env": { "EXPO_PUBLIC_API_URL": "https://<your-backend-host>/api" } }
 ```
 
-When the build finishes (about 10–20 minutes) EAS prints a download link and QR code for the `.apk`. Install it on a phone (allow "install unknown apps"). Rebuild whenever the backend URL changes; bump `android.versionCode` in `app.json` for each new APK you hand out. `--profile production` makes a Play Store `.aab` instead.
+The current APK was built this way (EAS project `@samarthkumble/carbon-credit-marketplace`, backend `https://elsewhere-pasty-grip.ngrok-free.dev/api` in `mobile/eas.json`).
+
+When the build finishes (about 10–20 minutes, plus time in the free queue) EAS prints a download link and QR code for the `.apk`. Install it on a phone (allow "install unknown apps"). Rebuild whenever the backend URL changes; bump `android.versionCode` in `app.json` for each new APK you hand out. `--profile production` makes a Play Store `.aab` instead.
 
 ---
 
