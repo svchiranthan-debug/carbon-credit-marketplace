@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Alert
 } from "react-native";
-import MapView, { Marker, Polygon } from "react-native-maps";
+import LeafletMap, { LeafletMapHandle } from "./LeafletMap";
 import * as Location from "expo-location";
 
 interface PlantationMapModalProps {
@@ -64,7 +64,7 @@ export default function PlantationMapModal({
   const [locationName, setLocationName] = useState<string>("");
   const [mode, setMode] = useState<"PIN" | "BOUNDARY">("PIN");
   const [vertices, setVertices] = useState<LatLng[]>([]);
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<LeafletMapHandle | null>(null);
   const areaHa = polygonAreaHectares(vertices);
 
   useEffect(() => {
@@ -79,12 +79,7 @@ export default function PlantationMapModal({
   }, [visible, initialLat, initialLon]);
 
   const animateTo = (lat: number, lon: number) => {
-    mapRef.current?.animateToRegion({
-      latitude: lat,
-      longitude: lon,
-      latitudeDelta: 0.04,
-      longitudeDelta: 0.04
-    }, 600);
+    mapRef.current?.flyTo(lat, lon, 15);
   };
 
   const handleUseLiveGPS = async () => {
@@ -94,7 +89,7 @@ export default function PlantationMapModal({
       if (status !== "granted") {
         Alert.alert(
           "Location Permission Required",
-          "Please enable location permission in iPhone Settings to locate your plantation on the map."
+          "Please allow location access for this app in your phone's Settings to locate your plantation on the map."
         );
         return;
       }
@@ -130,26 +125,41 @@ export default function PlantationMapModal({
       return;
     }
 
-    // 2. Genuine native geocoding via expo-location (Apple Maps / CLGeocoder on iOS)
+    // 2. The phone's own geocoder (expo-location). On Android it only works after location
+    //    permission has been granted, so ask first.
+    let found: { lat: number; lon: number } | null = null;
     try {
-      const results = await Location.geocodeAsync(q);
-      if (results && results.length > 0) {
-        const first = results[0];
-        const lat = first.latitude;
-        const lon = first.longitude;
-        setSelectedCoord({ latitude: lat, longitude: lon });
-        setLocationName(q);
-        animateTo(lat, lon);
-      } else {
-        Alert.alert(
-          "Location Not Found",
-          `Could not locate "${q}". Tap any location preset below or tap directly on the map to place your pin.`
-        );
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === "granted") {
+        const results = await Location.geocodeAsync(q);
+        if (results && results.length > 0) found = { lat: results[0].latitude, lon: results[0].longitude };
       }
-    } catch (err: any) {
+    } catch {
+      // no geocoder on this device, or it failed: fall through to the web search below
+    }
+
+    // 3. Fallback: OpenStreetMap Nominatim, the same search the web app uses (no key needed).
+    if (!found) {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
+          { headers: { Accept: "application/json", "User-Agent": "CarbonCreditMarketplace-mobile/1.0" } }
+        );
+        const rows = res.ok ? await res.json() : [];
+        if (Array.isArray(rows) && rows.length > 0) found = { lat: parseFloat(rows[0].lat), lon: parseFloat(rows[0].lon) };
+      } catch {
+        // offline or blocked; handled below
+      }
+    }
+
+    if (found && Number.isFinite(found.lat) && Number.isFinite(found.lon)) {
+      setSelectedCoord({ latitude: found.lat, longitude: found.lon });
+      setLocationName(q);
+      animateTo(found.lat, found.lon);
+    } else {
       Alert.alert(
-        "Search Error",
-        `Geocoding query failed: ${err.message || "Unknown error"}. You can tap directly on the map to place your pin.`
+        "Location Not Found",
+        `Could not locate "${q}". Check the spelling or internet connection, or tap a preset or the map to place your pin.`
       );
     }
   };
@@ -243,21 +253,16 @@ export default function PlantationMapModal({
           ))}
         </View>
 
-        {/* Native MapView */}
+        {/* Map: Leaflet (Esri satellite / OpenStreetMap) in a WebView; needs no Google Maps key */}
         <View style={styles.mapWrapper}>
-          <MapView
+          <LeafletMap
             ref={mapRef}
             style={styles.map}
-            initialRegion={{
-              latitude: selectedCoord.latitude,
-              longitude: selectedCoord.longitude,
-              latitudeDelta: 0.04,
-              longitudeDelta: 0.04
-            }}
-            showsUserLocation={true}
-            showsMyLocationButton={true}
-            onPress={(e) => {
-              const coord = e.nativeEvent.coordinate;
+            initialCenter={selectedCoord}
+            mode={mode}
+            pin={selectedCoord}
+            vertices={vertices}
+            onTap={(coord) => {
               if (mode === "BOUNDARY") {
                 setVertices((v) => [...v, coord]);
                 return;
@@ -265,25 +270,11 @@ export default function PlantationMapModal({
               setSelectedCoord(coord);
               setLocationName(`Geotagged (${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)})`);
             }}
-          >
-            {mode === "BOUNDARY" && vertices.length >= 3 && (
-              <Polygon coordinates={vertices} strokeColor="#166534" fillColor="rgba(22,101,52,0.25)" strokeWidth={2} />
-            )}
-            {mode === "BOUNDARY" && vertices.map((v, i) => (
-              <Marker key={`v${i}`} coordinate={v} pinColor="#166534" title={`Corner ${i + 1}`} />
-            ))}
-            {mode === "PIN" && <Marker
-              coordinate={selectedCoord}
-              draggable
-              onDragEnd={(e) => {
-                const coord = e.nativeEvent.coordinate;
-                setSelectedCoord(coord);
-                setLocationName(`Pin (${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)})`);
-              }}
-              title="Plantation Geotag"
-              description="Farm center coordinates for Sentinel-2 satellite MRV"
-            />}
-          </MapView>
+            onPinDrag={(coord) => {
+              setSelectedCoord(coord);
+              setLocationName(`Pin (${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)})`);
+            }}
+          />
 
           {/* Floating Instructions Pill */}
           <View style={styles.floatingGuide}>

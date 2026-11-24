@@ -93,7 +93,7 @@ export default function FarmerScreen() {
       if (status !== "granted") {
         Alert.alert(
           "Location Permission Required",
-          "Location permission is needed to geotag your plantation. Please enable in iPhone Settings."
+          "Location permission is needed to geotag your plantation. Please allow it for this app in your phone's Settings."
         );
         return;
       }
