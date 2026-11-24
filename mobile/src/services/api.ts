@@ -83,8 +83,8 @@ class MobileApiClient {
       res = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
     } catch {
       throw new Error(
-        `Cannot reach the backend at ${API_BASE_URL}. Check that FastAPI is running with --host 0.0.0.0 ` +
-          `and that the phone and computer are on the same network.`
+        `Cannot reach the backend at ${API_BASE_URL}. Check that the phone has internet and that the ` +
+          `backend (uvicorn) and the ngrok tunnel are both running on the laptop.`
       );
     }
 
